@@ -15,7 +15,7 @@
 ## M1 — Repository and read-only integration
 
 - [x] Create public `zhangys10/mijia-agent` and publish the extracted project.
-- [ ] Verify the first GitHub CI run.
+- [x] Verify the first [GitHub CI run](https://github.com/zhangys10/mijia-agent/actions/runs/35288812809): Python lint/format, 33 Python tests, and five adapter tests passed.
 - [x] Open companion draft PR [mijia-web-console#32](https://github.com/zhangys10/mijia-web-console/pull/32).
 - [ ] Reconcile the existing PR stack deliberately. Companion patch is based on PR #31 head, not main.
 - [ ] Deploy the console tool facade in a development environment.
