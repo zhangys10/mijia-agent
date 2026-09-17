@@ -1,0 +1,3 @@
+{
+  "agents": { "framework": "openai-agents-sdk", "dir": "agents", "timeout": 60 }
+}

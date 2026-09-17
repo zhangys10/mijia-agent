@@ -1,0 +1,7 @@
+{
+  "name": "mijia-agent-makers-adapter",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": { "test": "node --experimental-strip-types --test tests/*.test.mjs" }
+}

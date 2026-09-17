@@ -1,0 +1,100 @@
+# Architecture
+
+## Repository boundary
+
+```mermaid
+flowchart TD
+    Web["Web assistant / future Siri"] --> Console["Web console: identity and quota"]
+    Console --> Makers["New repo: Makers lifecycle adapter"]
+    Makers --> Python["New repo: Python agent service"]
+    Python --> Gateway["Makers AI Gateway"]
+    Python --> Tools["Web console: authenticated tools API"]
+    Tools --> Xiaomi["Existing Xiaomi scene services"]
+    Console --> KV["EdgeOne KV: soft quotas"]
+    Makers --> Store["Makers conversation store"]
+```
+
+The physical-execution edge is the target design. The first companion patch permits
+authorization and discovery only; activation returns `AI_SCENE_EXECUTION_DISABLED`.
+
+| Responsibility | Owner after extraction | Reason |
+|---|---|---|
+| QR login, encrypted Xiaomi Cookie, raw Xiaomi user ID | Web console | Existing trusted credential boundary |
+| Stable HMAC principal, home ownership, browser conversation handle | Web console | Never trust caller-supplied identity |
+| Quota policy and reserve/commit/release | Web console Edge Functions | KV binding exists there; preserve one shared web/Siri ledger |
+| Gateway provider, intent selection, safe tool validation | Python | Agent development belongs in the new repo |
+| Conversation messages, lifecycle, platform cancellation | New repo Makers adapter | Preserve existing platform storage/runtime semantics |
+| Real scene IDs, risk review, enabled state, execution | Web console | Model and Python consume opaque aliases only |
+| Reminder interpretation, preference policy | Future Python modules | Shared agent behavior across entrypoints |
+| Durable reminder delivery, long-term preference storage | Future adapters | Not active conversation memory or quota KV |
+| Web assistant UI | Web console | Existing authenticated application |
+
+## Trusted context
+
+The existing console derives `usr_` + Base64URL(HMAC-SHA256(secret, `xiaomi:` + userId)).
+It validates current home access, issues scoped conversation handles, reserves quota,
+and sends a short-lived sealed binding to the Makers entrypoint. The binding remains
+opaque in both the adapter and Python. Only the console tools API can decrypt it.
+
+Each adapter request authenticates the console using `AI_AGENT_INTERNAL_SECRET`,
+then calls the console's `authorize` operation with `AI_TOOLS_INTERNAL_SECRET` to
+validate binding and current home membership before touching memory. Python accepts
+only `AI_PYTHON_INTERNAL_SECRET`; it passes the binding to the console, never the model.
+
+These three secrets are server-only and independently rotated. Model requests contain
+only user text, bounded history, locale/timezone, and sanitized scene summaries.
+Model tool arguments may select an alias, never a principal, home or raw device address.
+
+The Python endpoint does not independently enforce quotas. Its only permitted caller
+is the adapter, whose only caller is the quota-enforcing console. Protect both internal
+surfaces with service secrets and deployment ingress controls; never expose their
+credentials to browsers or Siri. A future public Python ingress must authenticate and
+reserve quota explicitly rather than reusing this internal endpoint.
+
+## Model and scene decisions
+
+The provider uses the configured OpenAI-compatible Gateway with a required model
+allowlist, fixed non-thinking mode, bounded output and timeout. No production model
+is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
+2026-09-17; this remains a deployment observation, not a source default.
+
+Only `list_scenes` and `activate_scene` are recognized. Additional arguments,
+multiple tool calls, unknown aliases and invented tools fail closed. Activation also
+requires `scene:activate` and a conservative explicit-current-command check in Python.
+Negation, conditions, quoted commands and ambiguous language produce clarification.
+The matching grammar is intentionally narrow; broader language requires tests or a
+separate confirmation flow. A model reply never overrides the executor's actual status.
+
+## State and idempotency
+
+Python handles one bounded turn and holds no durable state. Multiple Python workers
+can therefore serve turns; all history and receipts are supplied/managed by Makers.
+The adapter retains the latest 12 history messages and scopes memory by principal,
+home and platform conversation. A replay changes the response request ID to the
+current attempt and reports zero new token usage. This does not mean zero request
+quota consumption; the console still owns that policy.
+
+The adapter records processing before the call and retains uncertain outcomes after
+timeout. A process-local set prevents concurrent turns in the same conversation on
+one worker. **Neither this set nor a read-then-write Makers state entry establishes a
+distributed atomic execution claim.** The first migration must not enable physical
+execution until the console owns a durable principal/home/idempotency-key receipt,
+independent of conversation, with atomic claim and uncertain-outcome reconciliation.
+Deleting history must not delete that executor ledger.
+
+Current adapter failure caching is conservative: failed/uncertain attempts do not
+automatically rerun. Receipt retention/cleanup and deletion behavior on the real Makers
+store need validation. No exactly-once hardware guarantee is claimed.
+
+## Preserved product decisions
+
+- China-first deployment; Makers AI Gateway; env-configured default/override/unlimited user quotas.
+- EdgeOne KV is eventually consistent and supplies soft quotas only; production remains fail-closed.
+- Web assistant first, then Siri/Automation Token using the same authenticated quota path.
+- No user model keys; old `/api/ai/command` remains disabled during migration.
+- Preview produces mock text without Gateway/device access.
+- Home Assistant stays a future executor adapter.
+- Inferred/unknown device relationships cannot authorize execution; existing domain semantics stay in the console.
+- No locks, gas, access control, camera workflows or arbitrary MIoT tools.
+- Reminders default to notifications/options; long-term habits produce suggestions with explicit user consent.
+- No new database is imposed by this extraction. Durable executor and reminder storage remains an explicit design gate.
