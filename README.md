@@ -60,13 +60,14 @@ Run its tests with Node 22.13+:
 npm test --prefix adapters/edgeone
 ```
 
-The adapter has no npm dependencies. `npm run build --prefix adapters/edgeone`
-syncs `src/mijia_agent` into the Cloud Functions build tree; deploy with the EdgeOne
-Makers project rooted at `adapters/edgeone`. That root contains both platform markers:
-`edgeone.json` plus `agents/` for Agent routes, and `cloud-functions/` for Python.
-The Cloud Function is exposed as `/api`, and EdgeOne strips that prefix before invoking
-the existing FastAPI routes. Its runtime APIs and Cloud Functions build behavior still
-need live verification.
+The adapter has no npm dependencies. The build script syncs `src/mijia_agent` into
+the Cloud Functions build tree. Locally, run `npm run build --prefix adapters/edgeone`
+from the repository root. In EdgeOne, the detected package root is already
+`adapters/edgeone`, so enter only `npm run build` as the custom build command.
+That root contains both platform markers: `edgeone.json` plus `agents/` for Agent
+routes, and `cloud-functions/` for Python. The Cloud Function is exposed as `/api`,
+and EdgeOne strips that prefix before invoking the existing FastAPI routes. Its
+runtime APIs and Cloud Functions build behavior still need live verification.
 Python remains unable to access EdgeOne KV.
 
 ## Layout

@@ -33,8 +33,10 @@ proxies and tracing; access logs should not capture bindings or user text.
 1. Review/apply `integration/mijia-web-console.patch` against pinned PR #31 head in a clean
    branch, then apply `integration/mijia-web-console-usage-settlement.patch`; or use the updated
    companion PR. Keep its activation gate closed.
-2. Run `npm run build --prefix adapters/edgeone` to sync `src/mijia_agent` into
-   `adapters/edgeone/cloud-functions/api/mijia_agent`.
+2. Build with `npm run build` in EdgeOne. EdgeOne detects
+   `adapters/edgeone/package.json` and executes the command there, syncing
+   `src/mijia_agent` into `adapters/edgeone/cloud-functions/api/mijia_agent`.
+   From a local repository root, use `npm run build --prefix adapters/edgeone`.
 3. Set the new Makers project root to `adapters/edgeone`; link the correct development
    project and deploy the Agents plus Cloud Functions configuration. The root must keep
    `edgeone.json`, `agents/`, and `cloud-functions/` together. Configure Python's
@@ -58,6 +60,11 @@ adapter's `AI_PYTHON_BASE_URL` to `https://<makers-host>/api`.
 `cloud-functions/api/mijia_agent` mirror is ignored by Git and must be rebuilt after
 Python source changes. The included Dockerfile remains a local standalone/fallback
 host; it is not the EdgeOne deployment path.
+
+EdgeOne's custom build command must be exactly `npm run build`. Do not use
+`npm run build --prefix adapters/edgeone` there: EdgeOne already changes into
+`adapters/edgeone`, so that form resolves the package as
+`adapters/edgeone/adapters/edgeone/package.json` and fails with `ENOENT`.
 
 The project's prior contract used `agents.framework=openai-agents-sdk`, `dir=agents`,
 `timeout=60`, file routes and the `Makers-Conversation-Id` header. The standalone adapter
