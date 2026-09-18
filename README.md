@@ -60,9 +60,10 @@ Run its tests with Node 22.13+:
 npm test --prefix adapters/edgeone
 ```
 
-The adapter has no npm dependencies. The build script syncs `src/mijia_agent` into
-the Cloud Functions build tree. Locally, run `npm run build --prefix adapters/edgeone`
-from the repository root. In EdgeOne, the detected package root is already
+The adapter has no npm dependencies. The deterministic `mijia_agent` package is committed
+under `cloud-functions/api/` because EdgeOne packages Python sources from the Git tree.
+Run `npm run build --prefix adapters/edgeone` after changing `src/mijia_agent`, then commit
+both source and mirror. In EdgeOne, the detected package root is already
 `adapters/edgeone`, so enter only `npm run build` as the custom build command.
 That root contains both platform markers: `edgeone.json` plus `agents/` for Agent
 routes, and `cloud-functions/` for Python. The Cloud Function is exposed as `/api`,

@@ -68,8 +68,8 @@ Tencent documents for ASGI routing—then registers the shared lifespan and rout
 exposes the ASGI application at the external `/api` prefix; EdgeOne removes that prefix
 before dispatch, so FastAPI continues to declare `/healthz` and `/internal/v1/turn`.
 `src/mijia_agent` remains the canonical source and is copied into the Cloud Functions
-build tree by the adapter's `build` script. EdgeOne executes that script from
-`adapters/edgeone`; do not add `--prefix adapters/edgeone` to EdgeOne's build command.
+build tree by the adapter's `build` script; the generated mirror is committed because
+EdgeOne must package it from Git. Tests compare the source and mirror byte-for-byte.
 This hosting change does not grant Python access to EdgeOne KV or conversation state.
 
 ## Model and scene decisions

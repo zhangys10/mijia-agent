@@ -33,10 +33,10 @@ proxies and tracing; access logs should not capture bindings or user text.
 1. Review/apply `integration/mijia-web-console.patch` against pinned PR #31 head in a clean
    branch, then apply `integration/mijia-web-console-usage-settlement.patch`; or use the updated
    companion PR. Keep its activation gate closed.
-2. Build with `npm run build` in EdgeOne. EdgeOne detects
-   `adapters/edgeone/package.json` and executes the command there, syncing
-   `src/mijia_agent` into `adapters/edgeone/cloud-functions/api/mijia_agent`.
-   From a local repository root, use `npm run build --prefix adapters/edgeone`.
+2. Ensure `adapters/edgeone/cloud-functions/api/mijia_agent` is committed and current.
+   From a local repository root, run `npm run build --prefix adapters/edgeone`, then commit
+   both `src/mijia_agent` and the deterministic mirror. EdgeOne should build with
+   `npm run build` from its detected `adapters/edgeone` package root.
 3. Set the new Makers project root to `adapters/edgeone`; link the correct development
    project and deploy the Agents plus Cloud Functions configuration. The root must keep
    `edgeone.json`, `agents/`, and `cloud-functions/` together. Configure Python's
@@ -56,8 +56,8 @@ EdgeOne strips `/api` before dispatch, so the Python routes stay unchanged. Set 
 adapter's `AI_PYTHON_BASE_URL` to `https://<makers-host>/api`.
 
 `cloud-functions/requirements.txt` pins the direct runtime dependencies
-`fastapi==0.141.1` and `httpx==0.28.1`. The generated
-`cloud-functions/api/mijia_agent` mirror is ignored by Git and must be rebuilt after
+`fastapi==0.141.1` and `httpx==0.28.1`. The
+`cloud-functions/api/mijia_agent` mirror is committed and must be regenerated after
 Python source changes. The included Dockerfile remains a local standalone/fallback
 host; it is not the EdgeOne deployment path.
 
