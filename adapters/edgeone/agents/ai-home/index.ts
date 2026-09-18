@@ -22,8 +22,12 @@ export async function onRequest(context: Context) {
     if (previous) {
       if (previous.hash !== fingerprint) throw new Error("AI_IDEMPOTENCY_CONFLICT");
       if (previous.status === "completed" && previous.result) {
-        // A replay made no new model call. Keep the caller's request ID and avoid double token charge.
-        return json({ ...previous.result, requestId, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimated: false } }, previous.httpStatus ?? 200);
+        const failed = (previous.httpStatus ?? 200) < 200 || (previous.httpStatus ?? 200) >= 300;
+        const replayUsage = failed
+          ? previous.result.usage
+          : { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimated: false };
+        // Successful replays make no new model call. Finalized failures retain known usage.
+        return json({ ...previous.result, requestId, usage: replayUsage }, previous.httpStatus ?? 200);
       }
       throw new Error(previous.status === "processing" ? "AI_REQUEST_IN_PROGRESS" : "AI_EXECUTION_STATUS_UNKNOWN");
     }

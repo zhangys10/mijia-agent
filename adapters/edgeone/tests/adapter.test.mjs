@@ -51,6 +51,29 @@ test("uncertain upstream outcome never automatically reruns", async t => {
   assert.equal(calls, 1);
 });
 
+test("finalized upstream failure replay retains known model usage", async t => {
+  const { context, history } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    return Response.json({
+      code: "AI_GATEWAY_RATE_LIMITED",
+      message: "AI 请求未完成，请检查状态后重试。",
+      requestId: context.request.body.requestId,
+      usage: { promptTokens: 11, completionTokens: 3, totalTokens: 14, estimated: false },
+    }, { status: 429 });
+  });
+
+  assert.equal((await onRequest(context)).status, 429);
+  context.request.body.requestId = "req_example_000002";
+  const replay = await (await onRequest(context)).json();
+  assert.equal(replay.requestId, "req_example_000002");
+  assert.deepEqual(replay.usage, { promptTokens: 11, completionTokens: 3, totalTokens: 14, estimated: false });
+  assert.equal(calls, 1);
+  assert.equal(history.size, 0);
+});
+
 test("failed binding authorization prevents memory reads", async t => {
   const { context } = fixture();
   t.mock.method(globalThis, "fetch", async () => Response.json({ code: "AI_UNAUTHENTICATED" }, { status: 401 }));

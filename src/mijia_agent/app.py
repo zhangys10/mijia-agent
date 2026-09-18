@@ -14,9 +14,7 @@ from .models import AgentError, Turn
 from .service import AgentService
 
 
-def create_app(settings: Settings | None = None, service: AgentService | None = None) -> FastAPI:
-    config = settings or Settings.from_env()
-
+def create_lifespan(config: Settings, service: AgentService | None = None):
     @asynccontextmanager
     async def lifespan(app):
         if service is not None:
@@ -31,7 +29,10 @@ def create_app(settings: Settings | None = None, service: AgentService | None = 
             )
             yield
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    return lifespan
+
+
+def register_routes(app: FastAPI, config: Settings) -> FastAPI:
 
     @app.get("/healthz")
     async def health():
@@ -76,3 +77,17 @@ def create_app(settings: Settings | None = None, service: AgentService | None = 
             )
 
     return app
+
+
+def create_app(
+    settings: Settings | None = None,
+    service: AgentService | None = None,
+) -> FastAPI:
+    config = settings or Settings.from_env()
+    app = FastAPI(
+        lifespan=create_lifespan(config, service),
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    return register_routes(app, config)

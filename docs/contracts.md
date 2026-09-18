@@ -9,7 +9,9 @@ rejected. The existing console signs/validates conversation handles and owns quo
 
 ## Makers → Python
 
-`POST /internal/v1/turn`, `Authorization: Bearer <AI_PYTHON_INTERNAL_SECRET>`.
+`POST /api/internal/v1/turn` externally, `Authorization: Bearer <AI_PYTHON_INTERNAL_SECRET>`.
+EdgeOne strips `/api` before invoking the FastAPI route, which remains
+`POST /internal/v1/turn`.
 Maximum raw body: 64 KiB. Requests and nested history messages reject unknown fields.
 
 ```json

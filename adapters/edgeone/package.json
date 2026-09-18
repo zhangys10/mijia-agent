@@ -3,5 +3,8 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.13.0" },
-  "scripts": { "test": "node --experimental-strip-types --test tests/*.test.mjs" }
+  "scripts": {
+    "build": "node scripts/sync-python.mjs",
+    "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs"
+  }
 }

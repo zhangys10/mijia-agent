@@ -6,7 +6,7 @@
 flowchart TD
     Web["Web assistant / future Siri"] --> Console["Web console: identity and quota"]
     Console --> Makers["New repo: Makers lifecycle adapter"]
-    Makers --> Python["New repo: Python agent service"]
+    Makers --> Python["New repo: Python ASGI Cloud Function (/api)"]
     Python --> Gateway["Makers AI Gateway"]
     Python --> Tools["Web console: authenticated tools API"]
     Tools --> Xiaomi["Existing Xiaomi scene services"]
@@ -24,6 +24,7 @@ authorization and discovery only; activation returns `AI_SCENE_EXECUTION_DISABLE
 | Quota policy and reserve/commit/release | Web console Edge Functions | KV binding exists there; preserve one shared web/Siri ledger |
 | Gateway provider, intent selection, safe tool validation | Python | Agent development belongs in the new repo |
 | Conversation messages, lifecycle, platform cancellation | New repo Makers adapter | Preserve existing platform storage/runtime semantics |
+| Python HTTP hosting | EdgeOne Cloud Functions (`cloud-functions/api`) | Deploy the ASGI boundary with the Makers project |
 | Real scene IDs, risk review, enabled state, execution | Web console | Model and Python consume opaque aliases only |
 | Reminder interpretation, preference policy | Future Python modules | Shared agent behavior across entrypoints |
 | Durable reminder delivery, long-term preference storage | Future adapters | Not active conversation memory or quota KV |
@@ -46,10 +47,29 @@ only user text, bounded history, locale/timezone, and sanitized scene summaries.
 Model tool arguments may select an alias, never a principal, home or raw device address.
 
 The Python endpoint does not independently enforce quotas. Its only permitted caller
-is the adapter, whose only caller is the quota-enforcing console. Protect both internal
-surfaces with service secrets and deployment ingress controls; never expose their
-credentials to browsers or Siri. A future public Python ingress must authenticate and
-reserve quota explicitly rather than reusing this internal endpoint.
+is the adapter, whose only caller is the quota-enforcing console. The console commits
+actual model usage after success, preserves usage reported by finalized errors, and
+conservatively charges the original estimate when Gateway/transport usage is unknown;
+clearly pre-flight errors release their reservation. Protect both internal surfaces
+with service secrets and deployment ingress controls; never expose their credentials
+to browsers or Siri. A future public Python ingress must authenticate and reserve quota
+explicitly rather than reusing this internal endpoint.
+
+Configured remote Agent origins must use HTTPS; plain HTTP is allowed only for local
+development hosts. The web console preserves the stable status and code for disabled
+execution, uncertain execution, store unavailability, and home authorization failures
+rather than collapsing them into a generic agent failure.
+
+The Makers project root is `adapters/edgeone`. That root co-locates the Agent marker
+(`edgeone.json` and `agents/`) with the Cloud Functions marker (`cloud-functions/`).
+Its Cloud Function entry
+`cloud-functions/api/index.py` directly constructs `app = FastAPI(...)`—the entry marker
+Tencent documents for ASGI routing—then registers the shared lifespan and routes. It
+exposes the ASGI application at the external `/api` prefix; EdgeOne removes that prefix
+before dispatch, so FastAPI continues to declare `/healthz` and `/internal/v1/turn`.
+`src/mijia_agent` remains the canonical source and is copied into the Cloud Functions
+build tree by `npm run build --prefix adapters/edgeone`.
+This hosting change does not grant Python access to EdgeOne KV or conversation state.
 
 ## Model and scene decisions
 
@@ -70,9 +90,11 @@ separate confirmation flow. A model reply never overrides the executor's actual 
 Python handles one bounded turn and holds no durable state. Multiple Python workers
 can therefore serve turns; all history and receipts are supplied/managed by Makers.
 The adapter retains the latest 12 history messages and scopes memory by principal,
-home and platform conversation. A replay changes the response request ID to the
-current attempt and reports zero new token usage. This does not mean zero request
-quota consumption; the console still owns that policy.
+home and platform conversation. A successful replay changes the response request ID to
+the current attempt and reports zero new token usage. A finalized failure replay keeps
+the model usage already reported by the failed turn; it must not discard that known
+usage or make a new model call. This does not mean zero request quota consumption; the
+console still owns settlement policy.
 
 The adapter records processing before the call and retains uncertain outcomes after
 timeout. A process-local set prevents concurrent turns in the same conversation on

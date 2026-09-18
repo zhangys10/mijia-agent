@@ -8,4 +8,4 @@ build/
 dist/
 node_modules/
 .edgeone/
-
+adapters/edgeone/cloud-functions/api/mijia_agent/

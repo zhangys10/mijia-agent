@@ -1,0 +1,320 @@
+diff --git a/lib/ai/tools/remote-tool-service.ts b/lib/ai/tools/remote-tool-service.ts
+index 121eac3..a973920 100644
+--- a/lib/ai/tools/remote-tool-service.ts
++++ b/lib/ai/tools/remote-tool-service.ts
+@@ -26,6 +26,13 @@ export async function runRemoteTool(body: unknown, env: Environment, dependencie
+   const scopes = input.scopes as AgentScope[];
+   const principalId = input.principalId as string;
+   const homeId = input.homeId as string;
++  const idempotencyKey = input.idempotencyKey;
++  if (
++    idempotencyKey !== undefined
++    && (typeof idempotencyKey !== "string" || idempotencyKey.length < 16 || idempotencyKey.length > 128)
++  ) {
++    throw new RemoteToolError("AI_INVALID_REQUEST", 400);
++  }
+   let binding;
+   try {
+     binding = await verifyAgentBinding(input.sessionBinding as string, { principalId, homeId, scopes }, env.XIAOMI_SESSION_SECRET);
+@@ -43,6 +50,11 @@ export async function runRemoteTool(body: unknown, env: Environment, dependencie
+   }
+   if (input.tool !== "activate_scene") throw new RemoteToolError("AI_INVALID_REQUEST", 400);
+   if (!scopes.includes("scene:activate")) throw new RemoteToolError("AI_SCOPE_FORBIDDEN", 403);
++  if (!idempotencyKey) throw new RemoteToolError("AI_INVALID_REQUEST", 400);
++  const sceneId = (args as Record<string, unknown>).sceneId;
++  if (Object.keys(args).length !== 1 || typeof sceneId !== "string" || !/^scene_[a-f0-9]{16}$/.test(sceneId)) {
++    throw new RemoteToolError("AI_INVALID_REQUEST", 400);
++  }
+   if (env.VERCEL_ENV === "preview" || env.AI_ENVIRONMENT === "preview") throw new RemoteToolError("AI_PREVIEW_READ_ONLY", 403);
+   // Extraction is read-only until the executor owns durable, cross-conversation claims.
+   // Agent memory and eventually consistent quota KV cannot guarantee this boundary.
+diff --git a/lib/ai/web-chat/agent-client.ts b/lib/ai/web-chat/agent-client.ts
+index a28735b..b140538 100644
+--- a/lib/ai/web-chat/agent-client.ts
++++ b/lib/ai/web-chat/agent-client.ts
+@@ -34,18 +34,26 @@ export class AgentClientError extends Error {
+   readonly code: string;
+   readonly httpStatus: number;
+   readonly retryAfterSeconds?: number;
++  readonly usage?: AgentRunResult["usage"];
++  readonly usageUnknown: boolean;
+ 
+   constructor(
+     code: string,
+     message: string,
+     httpStatus: number,
+-    options: { retryAfterSeconds?: number } = {},
++    options: {
++      retryAfterSeconds?: number;
++      usage?: AgentRunResult["usage"];
++      usageUnknown?: boolean;
++    } = {},
+   ) {
+     super(message);
+     this.name = "AgentClientError";
+     this.code = code;
+     this.httpStatus = httpStatus;
+     this.retryAfterSeconds = options.retryAfterSeconds;
++    this.usage = options.usage;
++    this.usageUnknown = options.usageUnknown ?? false;
+   }
+ }
+ 
+@@ -80,32 +88,52 @@ function mappedAgentError(body: Record<string, unknown> | null) {
+   const retryAfterSeconds = Number.isSafeInteger(body?.retryAfterSeconds)
+     ? body?.retryAfterSeconds as number
+     : undefined;
++  const usage = normalizeUsage(body?.usage);
++  const usageUnknown = !usage && [
++    "AI_GATEWAY_TIMEOUT",
++    "AI_GATEWAY_UNAVAILABLE",
++    "AI_AGENT_UNAVAILABLE",
++    "AI_AGENT_CANCELLED",
++    "AI_SCENE_FAILED",
++    "AI_SCENE_TIMEOUT",
++  ].includes(code);
+   switch (code) {
+     case "AI_INVALID_REQUEST":
+       return new AgentClientError(code, "AI 请求格式无效", 400);
+     case "AI_SCOPE_FORBIDDEN":
+       return new AgentClientError(code, "当前请求不允许执行设备动作", 403);
++    case "AI_HOME_FORBIDDEN":
++      return new AgentClientError(code, "当前账号无权访问该家庭", 403);
+     case "AI_PREVIEW_READ_ONLY":
+       return new AgentClientError(code, "当前预览环境只允许只读对话", 403);
++    case "AI_SCENE_NOT_FOUND":
++      return new AgentClientError(code, "未找到可用的审核场景", 400);
++    case "AI_SCENE_EXECUTION_DISABLED":
++      return new AgentClientError(code, "远程场景执行尚未启用", 403);
+     case "AI_IDEMPOTENCY_CONFLICT":
+       return new AgentClientError(code, "相同幂等键对应不同请求", 409);
+     case "AI_REQUEST_IN_PROGRESS":
+       return new AgentClientError(code, "相同请求仍在处理中", 409);
++    case "AI_EXECUTION_STATUS_UNKNOWN":
++      return new AgentClientError(code, "请求执行状态未知，请勿自动重试", 409);
++    case "AI_AGENT_STORE_UNAVAILABLE":
++      return new AgentClientError(code, "AI 助手状态存储暂时不可用", 503);
+     case "AI_GATEWAY_RATE_LIMITED":
+-      return new AgentClientError(code, "AI Gateway 限流，请稍后重试", 429, { retryAfterSeconds });
++      return new AgentClientError(code, "AI Gateway 限流，请稍后重试", 429, { retryAfterSeconds, usage });
+     case "AI_GATEWAY_TIMEOUT":
+-      return new AgentClientError(code, "AI Gateway 响应超时", 504);
++      return new AgentClientError(code, "AI Gateway 响应超时", 504, { usage, usageUnknown });
+     case "AI_SCENE_FAILED":
+-      return new AgentClientError(code, "米家场景执行失败", 502);
++      return new AgentClientError(code, "米家场景执行失败", 502, { usage, usageUnknown });
+     case "AI_SCENE_TIMEOUT":
+-      return new AgentClientError(code, "米家场景执行超时", 504);
++      return new AgentClientError(code, "米家场景执行超时", 504, { usage, usageUnknown });
+     case "AI_AGENT_CANCELLED":
+-      return new AgentClientError(code, "请求已取消", 499);
++      return new AgentClientError(code, "请求已取消", 499, { usage, usageUnknown });
+     default:
+       return new AgentClientError(
+         code.startsWith("AI_GATEWAY_") ? "AI_GATEWAY_UNAVAILABLE" : "AI_AGENT_UNAVAILABLE",
+         code.startsWith("AI_GATEWAY_") ? "AI Gateway 暂时不可用" : "AI 助手暂时不可用",
+         502,
++        { usage, usageUnknown },
+       );
+   }
+ }
+@@ -198,7 +226,15 @@ export class MakersAgentClient implements WebAgentClient {
+ 
+   constructor(options: MakersAgentClientOptions) {
+     const endpoint = new URL(options.baseUrl);
+-    if (!['https:', 'http:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
++    const localHttp = endpoint.protocol === "http:"
++      && ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname);
++    if (
++      (endpoint.protocol !== "https:" && !localHttp)
++      || endpoint.username
++      || endpoint.password
++      || endpoint.search
++      || endpoint.hash
++    ) {
+       throw new AgentClientError("AI_AGENT_UNAVAILABLE", "Agent URL 配置无效", 502);
+     }
+     this.baseUrl = options.baseUrl.endsWith("/") ? options.baseUrl : `${options.baseUrl}/`;
+diff --git a/lib/ai/web-chat/web-chat-service.ts b/lib/ai/web-chat/web-chat-service.ts
+index e24bee4..3271ccf 100644
+--- a/lib/ai/web-chat/web-chat-service.ts
++++ b/lib/ai/web-chat/web-chat-service.ts
+@@ -4,7 +4,7 @@ import type { QuotaService, QuotaSummary } from "../quota/quota-service.ts";
+ import type { QuotaActualUsage } from "../quota/quota-store.ts";
+ import { createAgentBinding, type AgentScope } from "../security/agent-binding.ts";
+ import { derivePrincipalId } from "../security/principal.ts";
+-import type { WebAgentClient } from "./agent-client.ts";
++import { AgentClientError, type WebAgentClient } from "./agent-client.ts";
+ import {
+   createConversationHandle,
+   resolveConversationHomeId,
+@@ -123,6 +123,20 @@ function usageForQuota(result: AgentRunResult, fallback: number): QuotaActualUsa
+   return { promptTokens: fallback, completionTokens: 0, estimated: true };
+ }
+ 
++function usageForError(error: unknown, fallback: number): QuotaActualUsage | null {
++  if (!(error instanceof AgentClientError)) return null;
++  if (error.usage) {
++    return {
++      promptTokens: error.usage.promptTokens,
++      completionTokens: error.usage.completionTokens,
++      estimated: error.usage.estimated === true,
++    };
++  }
++  return error.usageUnknown
++    ? { promptTokens: fallback, completionTokens: 0, estimated: true }
++    : null;
++}
++
+ function publicQuota(summary: QuotaSummary): PublicQuotaSummary {
+   return {
+     mode: summary.mode,
+@@ -265,7 +279,9 @@ export class AiWebService {
+         signal,
+       });
+     } catch (error) {
+-      await quota.release(lease);
++      const failureUsage = usageForError(error, estimatedTokens);
++      if (failureUsage) await quota.commit(lease, failureUsage);
++      else await quota.release(lease);
+       throw error;
+     }
+ 
+diff --git a/tests/ai-remote-tools.test.mjs b/tests/ai-remote-tools.test.mjs
+index e4feb4e..10b35ae 100644
+--- a/tests/ai-remote-tools.test.mjs
++++ b/tests/ai-remote-tools.test.mjs
+@@ -34,6 +34,25 @@ test("home access is rechecked even with a valid binding", async () => {
+   await assert.rejects(runRemoteTool(await input(), env, { ...dependencies, homes: async () => [] }), /AI_HOME_FORBIDDEN/);
+ });
+ test("new remote execution stays closed until durable executor claims exist", async () => {
+-  const body = { ...await input(["ai:chat", "scene:activate"]), tool: "activate_scene", arguments: { sceneId: "scene_0123456789abcdef" } };
++  const body = {
++    ...await input(["ai:chat", "scene:activate"]),
++    idempotencyKey: "valid-idempotency-key-0001",
++    tool: "activate_scene",
++    arguments: { sceneId: "scene_0123456789abcdef" },
++  };
+   await assert.rejects(runRemoteTool(body, env, dependencies), /AI_SCENE_EXECUTION_DISABLED/);
+ });
++
++test("remote execution requires a valid idempotency key and strict scene argument", async () => {
++  const base = { ...await input(["ai:chat", "scene:activate"]), tool: "activate_scene", arguments: { sceneId: "scene_0123456789abcdef" } };
++  await assert.rejects(runRemoteTool({ ...base, idempotencyKey: undefined }, env, dependencies), /AI_INVALID_REQUEST/);
++  await assert.rejects(runRemoteTool({ ...base, idempotencyKey: "short-key" }, env, dependencies), /AI_INVALID_REQUEST/);
++  await assert.rejects(
++    runRemoteTool({ ...base, idempotencyKey: "valid-idempotency-key-0001", arguments: { sceneId: "not-a-scene" } }, env, dependencies),
++    /AI_INVALID_REQUEST/,
++  );
++  await assert.rejects(
++    runRemoteTool({ ...base, idempotencyKey: "valid-idempotency-key-0001", arguments: { sceneId: "scene_0123456789abcdef", extra: 1 } }, env, dependencies),
++    /AI_INVALID_REQUEST/,
++  );
++});
+diff --git a/tests/ai-web-chat.test.mjs b/tests/ai-web-chat.test.mjs
+index 6275629..e720078 100644
+--- a/tests/ai-web-chat.test.mjs
++++ b/tests/ai-web-chat.test.mjs
+@@ -4,6 +4,7 @@ import test from "node:test";
+ import { createChatHandler } from "../edge-functions/api/ai/chat.ts";
+ import { createConversationHandler } from "../edge-functions/api/ai/conversations.ts";
+ import { createDeleteConversationHandler } from "../edge-functions/api/ai/conversations/[conversationId].ts";
++import { AgentClientError, MakersAgentClient } from "../lib/ai/web-chat/agent-client.ts";
+ import { InMemoryQuotaStore } from "../lib/ai/quota/in-memory-quota-store.ts";
+ import { QuotaStoreError } from "../lib/ai/quota/quota-store.ts";
+ import { verifyAgentBinding } from "../lib/ai/security/agent-binding.ts";
+@@ -205,12 +206,15 @@ test("web chat rejects unauthenticated, oversized, foreign-home, and client-forg
+   assert.equal((await oversized.json()).code, "AI_INVALID_REQUEST");
+ });
+ 
+-test("web chat releases a quota reservation when the Agent fails", async () => {
++test("web chat settles known model usage when the Agent fails", async () => {
+   const quotaStore = new InMemoryQuotaStore({ env: "test", now: () => fixedTime });
+   const handler = createChatHandler(handlerOptions({
+     quotaStore,
+-    fetchImpl: async () => new Response(JSON.stringify({ code: "AI_GATEWAY_AUTH_FAILED" }), {
+-      status: 502,
++    fetchImpl: async () => new Response(JSON.stringify({
++      code: "AI_GATEWAY_RATE_LIMITED",
++      usage: { promptTokens: 19, completionTokens: 7, totalTokens: 26, estimated: false },
++    }), {
++      status: 429,
+       headers: { "Content-Type": "application/json" },
+     }),
+   }));
+@@ -219,12 +223,71 @@ test("web chat releases a quota reservation when the Agent fails", async () => {
+     env: env(),
+   });
+ 
+-  assert.equal(response.status, 502);
+-  assert.equal((await response.json()).code, "AI_GATEWAY_UNAVAILABLE");
++  assert.equal(response.status, 429);
++  assert.equal((await response.json()).code, "AI_GATEWAY_RATE_LIMITED");
+   const principalId = await derivePrincipalId(sessionA, { AI_PRINCIPAL_SECRET: principalSecret });
+   const snapshot = await quotaStore.getSnapshot(principalId);
+-  assert.equal(snapshot.requestsToday, 0);
+-  assert.equal(snapshot.totalTokensThisMonth, 0);
++  assert.equal(snapshot.requestsToday, 1);
++  assert.equal(snapshot.totalTokensThisMonth, 26);
++});
++
++test("web chat conservatively settles unknown Agent transport outcomes", async () => {
++  const quotaStore = new InMemoryQuotaStore({ env: "test", now: () => fixedTime });
++  const handler = createChatHandler(handlerOptions({
++    quotaStore,
++    fetchImpl: async () => new Response(JSON.stringify({ code: "AI_GATEWAY_TIMEOUT" }), {
++      status: 504,
++      headers: { "Content-Type": "application/json" },
++    }),
++  }));
++  const response = await handler({
++    request: await chatRequest({ homeId: home.id, message: "你好" }),
++    env: env(),
++  });
++
++  assert.equal(response.status, 504);
++  assert.equal((await response.json()).code, "AI_GATEWAY_TIMEOUT");
++  const principalId = await derivePrincipalId(sessionA, { AI_PRINCIPAL_SECRET: principalSecret });
++  const snapshot = await quotaStore.getSnapshot(principalId);
++  assert.equal(snapshot.requestsToday, 1);
++  assert.equal(snapshot.totalTokensThisMonth, 1036);
++  assert.equal(snapshot.estimatedTokensThisMonth, 1036);
++});
++
++test("remote Agent base URLs require HTTPS except local development", () => {
++  const options = { internalSecret: "x".repeat(32) };
++  assert.throws(
++    () => new MakersAgentClient({ ...options, baseUrl: "http://remote.example" }),
++    (error) => error instanceof AgentClientError && error.code === "AI_AGENT_UNAVAILABLE",
++  );
++  assert.throws(
++    () => new MakersAgentClient({ ...options, baseUrl: "https://user:password@example.com" }),
++    (error) => error instanceof AgentClientError && error.code === "AI_AGENT_UNAVAILABLE",
++  );
++  assert.doesNotThrow(() => new MakersAgentClient({ ...options, baseUrl: "http://localhost:3000" }));
++});
++
++test("web chat maps disabled execution and uncertain agent state without generic 502", async () => {
++  const cases = [
++    { code: "AI_SCENE_EXECUTION_DISABLED", status: 403 },
++    { code: "AI_EXECUTION_STATUS_UNKNOWN", status: 409 },
++    { code: "AI_AGENT_STORE_UNAVAILABLE", status: 503 },
++  ];
++  for (const item of cases) {
++    const handler = createChatHandler(handlerOptions({
++      quotaStore: new InMemoryQuotaStore({ env: "test", now: () => fixedTime }),
++      fetchImpl: async () => new Response(JSON.stringify({ code: item.code }), {
++        status: item.status,
++        headers: { "Content-Type": "application/json" },
++      }),
++    }));
++    const response = await handler({
++      request: await chatRequest({ homeId: home.id, message: "你好" }),
++      env: env(),
++    });
++    assert.equal(response.status, item.status);
++    assert.equal((await response.json()).code, item.code);
++  }
+ });
+ 
+ test("web chat returns quota retry time and honors fail-open storage policy", async () => {
