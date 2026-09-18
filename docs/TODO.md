@@ -11,6 +11,7 @@
 - [x] Add console authorization/discovery API companion patch with current-home revalidation.
 - [x] Preserve AI design documents and write current repo boundary, deployment plan and contracts.
 - [x] Add locked dependencies, Dockerfile, CI, Python tests and adapter tests.
+- [x] Add the EdgeOne Cloud Functions ASGI entry and deterministic Python package sync.
 
 ## M1 — Repository and read-only integration
 
@@ -19,12 +20,12 @@
 - [x] Open companion draft PR [mijia-web-console#32](https://github.com/zhangys10/mijia-web-console/pull/32).
 - [ ] Reconcile the existing PR stack deliberately. Companion patch is based on PR #31 head, not main.
 - [ ] Deploy the console tool facade in a development environment.
-- [ ] Deploy Python to a mainland-reachable Python/ASGI host; configure Gateway credentials explicitly.
-- [ ] Link/deploy the new repo's Makers adapter subproject; verify build settings and runtime APIs.
+- [ ] Deploy the new repo's Makers adapter subproject with the Python ASGI Cloud Function;
+  configure Gateway credentials explicitly and verify the `/api` route stripping contract.
 - [ ] Configure console `AI_AGENT_BASE_URL` to the new adapter and exercise create/chat/list/delete.
 - [ ] Validate stop propagation on the real Makers runtime, including an in-flight Gateway call.
 - [ ] Ensure preview is blocked/mock at the outer console boundary as well as Python.
-- [ ] Verify Gateway model availability from the new Python host; previous project verification is insufficient.
+- [ ] Verify Gateway model availability from the new Python Cloud Function; previous project verification is insufficient.
 
 Acceptance: logged-in A/B users cannot read each other's history or catalog; raw Xiaomi
 credentials never enter the new service; no device actions occur; quota remains fail-closed.
@@ -41,9 +42,11 @@ Owner: console executor contract; Python consumes the same narrow Tool API.
   completed call → replay; timeout/crash after dispatch → uncertain, never blind retry.
 - [ ] Reload scene and validate current home, enabled state, alias, reviewed action revision and low-risk policy.
 - [ ] Wire existing `runManualScene` through this executor, replacing the explicit disabled response.
-- [ ] Extend stable console error mapping for `AI_EXECUTION_STATUS_UNKNOWN` and disabled execution.
-- [ ] Settle known model usage on errors; conservatively account for unknown Gateway/transport outcomes.
-  The current Phase 5 catch/release path discards usage on failure and must be corrected.
+- [x] Extend stable console error mapping for `AI_EXECUTION_STATUS_UNKNOWN` and disabled execution.
+- [x] Settle known model usage on errors; conservatively account for unknown Gateway/transport outcomes.
+  Implemented by `integration/mijia-web-console-usage-settlement.patch`, applied on top of the
+  existing companion patch. Known error usage is committed; unknown transport outcomes use the
+  conservative request estimate; clearly pre-flight errors release their reservation.
 - [ ] Ensure quota settlement failure after execution cannot cause another physical action.
 - [ ] Test duplicate keys across conversations, workers and restarts; scene edits after approval;
   partial result; client disconnect; cancellation and timeout after dispatch.

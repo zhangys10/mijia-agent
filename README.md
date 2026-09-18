@@ -51,27 +51,32 @@ the Makers adapter after the web console has authenticated the user and reserved
 ## EdgeOne adapter
 
 `adapters/edgeone/` contains the thin TypeScript shell needed by the existing
-Makers deployment contract. It stores bounded conversation history and receipts,
-forwards turns to Python, and implements delete/stop routes. It does not call the
-model or decrypt Xiaomi credentials. Run its tests with Node 22.13+:
+Makers deployment contract and the Python ASGI Cloud Function. It stores bounded
+conversation history and receipts, forwards turns to Python, and implements
+delete/stop routes. It does not call the model or decrypt Xiaomi credentials.
+Run its tests with Node 22.13+:
 
 ```bash
 npm test --prefix adapters/edgeone
 ```
 
-The adapter has no npm dependencies. Its runtime APIs follow the project's already
-verified Phase 0/4 contract; the extracted standalone deployment still needs live
-verification. Python is a separately hosted ASGI service. This repo does not claim
-that Makers directly hosts Python or that Python can directly access EdgeOne KV.
+The adapter has no npm dependencies. `npm run build --prefix adapters/edgeone`
+syncs `src/mijia_agent` into the Cloud Functions build tree; deploy with the EdgeOne
+Makers project rooted at `adapters/edgeone`. That root contains both platform markers:
+`edgeone.json` plus `agents/` for Agent routes, and `cloud-functions/` for Python.
+The Cloud Function is exposed as `/api`, and EdgeOne strips that prefix before invoking
+the existing FastAPI routes. Its runtime APIs and Cloud Functions build behavior still
+need live verification.
+Python remains unable to access EdgeOne KV.
 
 ## Layout
 
 | Path | Responsibility |
 |---|---|
 | `src/mijia_agent/` | Python HTTP boundary, Gateway, tools client, agent service |
-| `adapters/edgeone/` | Makers runtime, memory and lifecycle adapter |
+| `adapters/edgeone/` | Makers runtime, memory/lifecycle adapter, and Python Cloud Function entry |
 | `tests/` | Credential isolation, unsafe intent, tool and HTTP contract tests |
-| `integration/mijia-web-console.patch` | Companion patch against PR #31's pinned head |
+| `integration/*.patch` | Companion patches against PR #31's pinned head |
 | `docs/` | Current architecture, source audit, contracts, actionable backlog |
 
 No license is added: the source repository declares no open-source license.
