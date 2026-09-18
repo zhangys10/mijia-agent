@@ -59,6 +59,12 @@ adapter's `AI_PYTHON_BASE_URL` to `https://<makers-host>/api`.
 Python source changes. The included Dockerfile remains a local standalone/fallback
 host; it is not the EdgeOne deployment path.
 
+Use `npm run build` as EdgeOne's custom build command. EdgeOne detects
+`adapters/edgeone/package.json` and executes the command from that directory; adding
+`--prefix adapters/edgeone` there doubles the path. The generated Python builder output
+is expected at `.edgeone/cloud-functions/api-python/api/`, and the runtime imports the
+auxiliary package as `api.mijia_agent`.
+
 The project's prior contract used `agents.framework=openai-agents-sdk`, `dir=agents`,
 `timeout=60`, file routes and the `Makers-Conversation-Id` header. The standalone adapter
 config carries that baseline forward. The EdgeOne Cloud Functions file routing, ASGI

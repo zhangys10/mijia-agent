@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
-from mijia_agent.app import create_lifespan, register_routes
-from mijia_agent.config import Settings
+from api.mijia_agent.app import create_lifespan, register_routes
+from api.mijia_agent.config import Settings
 
 settings = Settings.from_env()
 lifespan = create_lifespan(settings)

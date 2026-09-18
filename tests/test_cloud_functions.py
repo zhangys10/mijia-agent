@@ -1,8 +1,14 @@
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+import mijia_agent
+from mijia_agent import app as canonical_app
+from mijia_agent import config as canonical_config
 
 
 def test_edgeone_cloud_functions_entry_exposes_the_internal_asgi_app(monkeypatch):
@@ -17,7 +23,14 @@ def test_edgeone_cloud_functions_entry_exposes_the_internal_asgi_app(monkeypatch
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    entry_path = Path(__file__).parents[1] / "adapters/edgeone/cloud-functions/api/index.py"
+    project_root = Path(__file__).parents[1]
+    entry_path = project_root / "adapters/edgeone/cloud-functions/api/index.py"
+    runtime_package = types.ModuleType("api")
+    runtime_package.mijia_agent = mijia_agent
+    monkeypatch.setitem(sys.modules, "api", runtime_package)
+    monkeypatch.setitem(sys.modules, "api.mijia_agent", mijia_agent)
+    monkeypatch.setitem(sys.modules, "api.mijia_agent.app", canonical_app)
+    monkeypatch.setitem(sys.modules, "api.mijia_agent.config", canonical_config)
     spec = importlib.util.spec_from_file_location("edgeone_cloud_function_entry", entry_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader

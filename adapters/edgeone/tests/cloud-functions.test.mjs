@@ -27,7 +27,7 @@ test("Cloud Functions build syncs the canonical Python package without cache fil
   }
   assert.equal(
     await readFile(path.join(root, "adapters/edgeone/cloud-functions/api/index.py"), "utf8"),
-    "from fastapi import FastAPI\n\nfrom mijia_agent.app import create_lifespan, register_routes\nfrom mijia_agent.config import Settings\n\nsettings = Settings.from_env()\nlifespan = create_lifespan(settings)\napp = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)\nregister_routes(app, settings)\n",
+    "from fastapi import FastAPI\n\nfrom api.mijia_agent.app import create_lifespan, register_routes\nfrom api.mijia_agent.config import Settings\n\nsettings = Settings.from_env()\nlifespan = create_lifespan(settings)\napp = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)\nregister_routes(app, settings)\n",
   );
 });
 
