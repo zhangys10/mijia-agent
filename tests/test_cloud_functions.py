@@ -17,7 +17,9 @@ def test_edgeone_cloud_functions_entry_exposes_the_internal_asgi_app(monkeypatch
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    entry_path = Path(__file__).parents[1] / "adapters/edgeone/cloud-functions/api/index.py"
+    project_root = Path(__file__).parents[1]
+    entry_path = project_root / "adapters/edgeone/cloud-functions/api/index.py"
+    monkeypatch.syspath_prepend(str(entry_path.parent.parent))
     spec = importlib.util.spec_from_file_location("edgeone_cloud_function_entry", entry_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
