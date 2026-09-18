@@ -18,13 +18,26 @@
 - [x] Create public `zhangys10/mijia-agent` and publish the extracted project.
 - [x] Verify the first [GitHub CI run](https://github.com/zhangys10/mijia-agent/actions/runs/35288812809): Python lint/format, 33 Python tests, and five adapter tests passed.
 - [x] Open companion draft PR [mijia-web-console#32](https://github.com/zhangys10/mijia-web-console/pull/32).
-- [ ] Reconcile the existing PR stack deliberately. Companion patch is based on PR #31 head, not main.
+- [x] Reconcile the existing PR stack deliberately. The current companion baseline is
+  `mijia-web-console` PR #33 (`02597111116c6ebd6b2aa61f891e31bbabcf15e8`), based on the
+  PR #31 stack; it passes the web console's targeted AI tests, typecheck, lint, and full
+  test suite. The checked-in extraction patches remain historical provenance.
 - [ ] Deploy the console tool facade in a development environment.
+- [ ] Follow `docs/m1-deployment-runbook.md` for the deployment sequence, verification
+  record, and rollback sign-off.
+- [x] Validate the local Makers runtime with `edgeone makers dev` after running
+  `npm run build --prefix adapters/edgeone`; `/api/healthz` returned `200 {"status":"ok"}`.
+  This check did not invoke the Gateway, send Xiaomi bindings, or execute a scene.
 - [ ] Deploy the new repo's Makers adapter subproject with the Python ASGI Cloud Function;
   configure Gateway credentials explicitly and verify the `/api` route stripping contract.
 - [ ] Configure console `AI_AGENT_BASE_URL` to the new adapter and exercise create/chat/list/delete.
+  Blocked until the adapter implements quota settlement, chat quota summaries, and
+  `POST /api/internal/quota`; remote console mode otherwise completes the turn and then fails
+  with a missing quota summary.
 - [ ] Validate stop propagation on the real Makers runtime, including an in-flight Gateway call.
-- [ ] Ensure preview is blocked/mock at the outer console boundary as well as Python.
+- [x] Ensure preview is blocked/mock at the outer console boundary as well as Python.
+  Console Web Chat now authenticates and validates the home/conversation before returning the
+  fixed mock without Agent, quota, or device calls.
 - [ ] Verify Gateway model availability from the new Python Cloud Function; previous project verification is insufficient.
 
 Acceptance: logged-in A/B users cannot read each other's history or catalog; raw Xiaomi
@@ -44,9 +57,10 @@ Owner: console executor contract; Python consumes the same narrow Tool API.
 - [ ] Wire existing `runManualScene` through this executor, replacing the explicit disabled response.
 - [x] Extend stable console error mapping for `AI_EXECUTION_STATUS_UNKNOWN` and disabled execution.
 - [x] Settle known model usage on errors; conservatively account for unknown Gateway/transport outcomes.
-  Implemented by `integration/mijia-web-console-usage-settlement.patch`, applied on top of the
-  existing companion patch. Known error usage is committed; unknown transport outcomes use the
-  conservative request estimate; clearly pre-flight errors release their reservation.
+  Rebased onto console `main` (branch `feat/ai-settlement-preview-runbook`) together with the
+  outer chat Preview mock. Known error usage is committed; unknown transport outcomes use the
+  conservative request estimate; clearly pre-flight errors release their reservation. The
+  checked-in patch remains historical provenance.
 - [ ] Ensure quota settlement failure after execution cannot cause another physical action.
 - [ ] Test duplicate keys across conversations, workers and restarts; scene edits after approval;
   partial result; client disconnect; cancellation and timeout after dispatch.

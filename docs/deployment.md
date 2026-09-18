@@ -30,6 +30,9 @@ proxies and tracing; access logs should not capture bindings or user text.
 
 ## Sequence
 
+For a step-by-step development deployment with per-step verification and rollback records, see
+the [M1 deployment runbook](./m1-deployment-runbook.md).
+
 1. Review/apply `integration/mijia-web-console.patch` against pinned PR #31 head in a clean
    branch, then apply `integration/mijia-web-console-usage-settlement.patch`; or use the updated
    companion PR. Keep its activation gate closed.
