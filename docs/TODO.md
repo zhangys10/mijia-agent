@@ -31,9 +31,9 @@
 - [ ] Deploy the new repo's Makers adapter subproject with the Python ASGI Cloud Function;
   configure Gateway credentials explicitly and verify the `/api` route stripping contract.
 - [ ] Configure console `AI_AGENT_BASE_URL` to the new adapter and exercise create/chat/list/delete.
-  Blocked until the adapter implements quota settlement, chat quota summaries, and
-  `POST /api/internal/quota`; remote console mode otherwise completes the turn and then fails
-  with a missing quota summary.
+  For M1 development, set console `AI_QUOTA_ENABLED=false`: the console returns a
+  principal-bound disabled summary and neither side reads or writes a quota ledger. This is
+  not cost protection; adapter settlement and quota summaries are deferred to M3.
 - [ ] Validate stop propagation on the real Makers runtime, including an in-flight Gateway call.
 - [x] Ensure preview is blocked/mock at the outer console boundary as well as Python.
   Console Web Chat now authenticates and validates the home/conversation before returning the
@@ -41,7 +41,9 @@
 - [ ] Verify Gateway model availability from the new Python Cloud Function; previous project verification is insufficient.
 
 Acceptance: logged-in A/B users cannot read each other's history or catalog; raw Xiaomi
-credentials never enter the new service; no device actions occur; quota remains fail-closed.
+credentials never enter the new service; no device actions occur. M1 development runs with
+quota explicitly disabled (`mode: disabled`, no enforcement or cost protection); fail-closed
+quota is an M3 production gate.
 
 ## M2 — Safe execution parity (blocks physical activation)
 
@@ -72,7 +74,13 @@ upstream idempotency/observable reconciliation.
 
 ## M3 — State, quota and cutover
 
+- [ ] Implement adapter-owned remote quota reserve/commit/release with known-usage,
+  unknown-outcome and clearly pre-flight settlement categories.
+- [ ] Attach a principal-bound quota summary to every successful chat and implement authenticated
+  `POST /api/internal/quota` summary reads; validate 429 recovery time and A/B isolation.
 - [ ] Bind real `ai_quota_kv`, measure propagation/overrun, retain `softLimit: true` and production fail-closed.
+- [ ] Restore console `AI_QUOTA_ENABLED=true` only after the adapter quota contract and deployed
+  settlement checks pass. Never run a second console ledger in remote mode.
 - [ ] Configure WAF/minute burst limits and conservative quota headroom.
 - [ ] Verify Makers state atomicity/serialization and delete semantics; add durable ledger independent of memory.
 - [ ] Implement bounded receipt retention and conversation TTL; never expire unresolved physical outcomes silently.
@@ -96,4 +104,4 @@ upstream idempotency/observable reconciliation.
 
 Both repos pass CI; live auth/quota/memory/tools are verified; safe execution parity is
 demonstrated; source legacy agent implementation is retired; deployment and rollback
-are tested. The present extraction does not yet satisfy this production definition.
+are tested. M1's explicitly disabled quota does not satisfy this production definition.

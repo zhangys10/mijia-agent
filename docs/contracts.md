@@ -5,7 +5,14 @@
 `POST /api/ai/chat`, `POST /api/ai/conversations`,
 `DELETE /api/ai/conversations/:id`, and `GET /api/ai/quota` retain the Phase 0/5
 Cookie authentication and body/response shapes. Browser principal overrides are
-rejected. The existing console signs/validates conversation handles and owns quotas.
+rejected. The existing console signs/validates conversation handles and owns quota
+policy. Quota enforcement is deferred (M3): while console `AI_QUOTA_ENABLED=false`,
+remote chat results need not carry `quota` and `GET /api/ai/quota` does not call the
+adapter; the console returns a fixed principal-bound `mode: "disabled"` summary.
+When quota is enabled, every successful chat result must carry a valid full summary
+(`principalId`, `mode`, `limits`, `usage`, `remaining`, `resetAt`, `softLimit: true`),
+and the adapter must serve the authenticated `POST /api/internal/quota` summary
+route — that remains a future M3 adapter contract.
 
 ## Makers → Python
 

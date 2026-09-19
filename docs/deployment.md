@@ -5,7 +5,7 @@
 | Variable | Console | Makers adapter | Python |
 |---|---|---|---|
 | `XIAOMI_SESSION_SECRET`, `AI_PRINCIPAL_SECRET` | Yes | Never | Never |
-| `AI_QUOTA_*`, KV binding | Yes | No | No |
+| `AI_QUOTA_*`, KV binding | Yes (`AI_QUOTA_ENABLED=false` defers enforcement in remote mode too) | No | No |
 | `AI_AGENT_BASE_URL` | New adapter's HTTPS origin | No | No |
 | `AI_AGENT_INTERNAL_SECRET` | Sends | Verifies | No |
 | `MIJIA_CONSOLE_BASE_URL` | No | Uses | Uses |
@@ -46,7 +46,10 @@ the [M1 deployment runbook](./m1-deployment-runbook.md).
    and `/api/internal/v1/turn` ingress controls.
 5. Test console→adapter→Python→Gateway and Python→console discovery with fake/low-risk data.
 6. Set console `AI_AGENT_BASE_URL` to the new Makers origin. Keep `AI_COMMAND_ENABLED=false`
-   and old BYOK UI closed. Public Web Chat paths stay unchanged.
+   and old BYOK UI closed. Public Web Chat paths stay unchanged. For the quota-deferred
+   development cutover, also set console `AI_QUOTA_ENABLED=false`: the console synthesizes
+   disabled quota summaries and requires no adapter quota surface. Do not claim cost
+   protection in this mode.
 7. Complete execution/state/quota gates in TODO.md before any production cutover.
 
 ## EdgeOne Cloud Functions
@@ -79,7 +82,8 @@ but no live project deployment or function invocation has been performed.
 Unset `AI_AGENT_BASE_URL` to restore the console's same-project Agent route. Keep the
 old implementation until parity/cutover is complete. Do not serve both writers for the
 same command namespace. If a command is uncertain, inspect its executor receipt before
-retrying on either backend. Quota remains in the console and is not reset by rollback.
+retrying on either backend. Quota remains a console-owned policy: disabled mode has no
+ledger to reset; restoring enforcement requires a verified local KV configuration.
 
 New Makers project histories are separate; no automatic cross-project memory migration
 is promised. Principal rotation changes user IDs and requires an explicit quota/history plan.
