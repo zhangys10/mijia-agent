@@ -21,7 +21,7 @@ authorization and discovery only; activation returns `AI_SCENE_EXECUTION_DISABLE
 |---|---|---|
 | QR login, encrypted Xiaomi Cookie, raw Xiaomi user ID | Web console | Existing trusted credential boundary |
 | Stable HMAC principal, home ownership, browser conversation handle | Web console | Never trust caller-supplied identity |
-| Quota policy and reserve/commit/release | Web console Edge Functions | KV binding exists there; preserve one shared web/Siri ledger |
+| Quota policy and reserve/commit/release | Web console Edge Functions | KV binding exists there; preserve one shared web/Siri ledger. Implementation is deferred (M3): remote mode runs with quota disabled and no ledger |
 | Gateway provider, intent selection, safe tool validation | Python | Agent development belongs in the new repo |
 | Conversation messages, lifecycle, platform cancellation | New repo Makers adapter | Preserve existing platform storage/runtime semantics |
 | Python HTTP hosting | EdgeOne Cloud Functions (`cloud-functions/api`) | Deploy the ASGI boundary with the Makers project |
@@ -47,13 +47,17 @@ only user text, bounded history, locale/timezone, and sanitized scene summaries.
 Model tool arguments may select an alias, never a principal, home or raw device address.
 
 The Python endpoint does not independently enforce quotas. Its only permitted caller
-is the adapter, whose only caller is the quota-enforcing console. The console commits
-actual model usage after success, preserves usage reported by finalized errors, and
-conservatively charges the original estimate when Gateway/transport usage is unknown;
-clearly pre-flight errors release their reservation. Protect both internal surfaces
-with service secrets and deployment ingress controls; never expose their credentials
-to browsers or Siri. A future public Python ingress must authenticate and reserve quota
-explicitly rather than reusing this internal endpoint.
+is the adapter, whose only caller is the console. Quota implementation is deferred (M3):
+while console `AI_QUOTA_ENABLED=false`, remote mode requires no adapter quota summary,
+no internal quota route, and no ledger on either side — the console returns a fixed
+principal-bound disabled summary, and neither service enforces limits or model-cost
+protection. That mode is development-only. When quota is re-enabled, the adapter owns
+settlement: it commits actual model usage after success, preserves usage reported by
+finalized errors, and conservatively charges the original estimate when
+Gateway/transport usage is unknown; clearly pre-flight errors release their reservation.
+Protect both internal surfaces with service secrets and deployment ingress controls;
+never expose their credentials to browsers or Siri. A future public Python ingress must
+authenticate and reserve quota explicitly rather than reusing this internal endpoint.
 
 Configured remote Agent origins must use HTTPS; plain HTTP is allowed only for local
 development hosts. The web console preserves the stable status and code for disabled
