@@ -5,7 +5,7 @@ export type Context = {
   store?: {
     getMessages(input: { conversationId: string; limit: number; order: "asc" }): Promise<Array<{ role: string; content: string }>>;
     appendMessage(input: { conversationId: string; role: string; content: string }): Promise<void>;
-    deleteConversation(id: string): Promise<boolean>;
+    deleteConversation(input: { conversationId: string }): Promise<void>;
     state: { get<T>(key: string): Promise<T | null>; set(key: string, value: unknown): Promise<void> };
   };
   utils?: { abortActiveRun?: (id: string) => Promise<boolean> | boolean };

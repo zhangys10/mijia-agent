@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { onRequest } from "../agents/ai-home/index.ts";
 import { onRequest as deleteConversation } from "../agents/ai-home/delete.ts";
+import { digest } from "../agents/ai-home/shared.ts";
 
 function fixture() {
   const state = new Map();
@@ -11,7 +12,15 @@ function fixture() {
     state: { get: async key => state.get(key) ?? null, set: async (key, value) => state.set(key, value) },
     getMessages: async ({ conversationId }) => history.get(conversationId) ?? [],
     appendMessage: async ({ conversationId, role, content }) => history.set(conversationId, [...(history.get(conversationId) ?? []), { role, content }]),
-    deleteConversation: async key => history.delete(key),
+    // Runtime-shaped Makers contract: object input, void on success, MemoryNotFoundError when absent.
+    deleteConversation: async ({ conversationId }) => {
+      if (!history.has(conversationId)) {
+        const error = new Error(`conversation ${String(conversationId)} not found`);
+        error.code = "MemoryNotFoundError";
+        throw error;
+      }
+      history.delete(conversationId);
+    },
   } };
   return { context, state, history };
 }
@@ -82,12 +91,31 @@ test("failed binding authorization prevents memory reads", async t => {
   assert.equal(spy.mock.callCount(), 0);
 });
 
-test("delete does not erase execution receipts", async t => {
+test("delete of absent history is idempotent and keeps receipts", async t => {
   const { context, state } = fixture();
   state.set("receipt", { status: "uncertain" });
   t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true }));
-  assert.equal((await deleteConversation(context)).status, 200);
+  const response = await (await deleteConversation(context)).json();
+  assert.equal(response.ok, true);
+  assert.equal(response.deleted, false);
   assert.ok(state.has("receipt"));
+});
+
+test("delete removes only this principal's scoped history and repeats idempotently", async t => {
+  const { context, history } = fixture();
+  const scoped = `agent_${(await digest("conv_test_123:usr_test:home-test")).slice(0, 24)}`;
+  const other = `agent_${(await digest("conv_test_123:usr_intruder:home-test")).slice(0, 24)}`;
+  history.set(scoped, [{ role: "user", content: "查看可用场景" }]);
+  history.set(other, [{ role: "user", content: "别的用户" }]);
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true }));
+  const first = await (await deleteConversation(context)).json();
+  assert.equal(first.ok, true);
+  assert.equal(first.deleted, true);
+  assert.equal(first.requestId, "req_example_000001");
+  assert.equal(history.has(scoped), false);
+  assert.equal(history.has(other), true);
+  const second = await (await deleteConversation(context)).json();
+  assert.deepEqual(second, { ok: true, requestId: "req_example_000001", deleted: false });
 });
 
 test("internal requests require correct service secret", async () => {
