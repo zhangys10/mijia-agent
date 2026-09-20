@@ -51,7 +51,9 @@ the [M1 deployment runbook](./m1-deployment-runbook.md).
    development cutover, also set console `AI_QUOTA_ENABLED=false`: the console synthesizes
    disabled quota summaries and requires no adapter quota surface. Do not claim cost
    protection in this mode.
-7. Complete execution/state/quota gates in TODO.md before any production cutover.
+7. Complete execution/state/quota gates before any production cutover (durable executor
+   claim, adapter settlement, fail-closed quota — tracked across contracts.md and the
+   deployment runbooks).
 
 ## EdgeOne Cloud Functions
 

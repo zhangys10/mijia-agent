@@ -1,6 +1,6 @@
 # Agent development guidelines
 
-Read README.md and docs/{architecture,migration,contracts,TODO,deployment}.md first.
+Read README.md and docs/{architecture,migration,contracts,deployment}.md first.
 Historical documents in docs/source-snapshot are evidence, not the current implementation plan.
 
 - Python owns reasoning and tools orchestration. Keep EdgeOne-specific APIs in adapters/edgeone.
@@ -11,7 +11,8 @@ Historical documents in docs/source-snapshot are evidence, not the current imple
 - Preserve server-side explicit-action checks, strict tool schemas, no-store responses and sanitized errors.
 - A timeout after a write is an unknown physical outcome. Never retry automatically.
 - EdgeOne KV is a soft quota store, not a distributed lock. In-memory locks are only a local optimization.
-- Do not enable remote device execution until the durable executor claim task in docs/TODO.md is complete.
+- Do not enable remote device execution until a durable executor claim exists
+  (atomic receipt independent of conversation; see docs/contracts.md).
 - Preview must not invoke a model or control physical devices.
 - Reminders and learned habits are future work. Habits suggest; they do not silently execute.
 - Keep `.env*`, real account data, logs, cookies, tokens and generated build directories out of git.

@@ -3,8 +3,8 @@
 Port of the console ``lib/ai/security/idempotency.ts`` semantics: replay
 completed responses, reject same-key/different-body conflicts, report
 processing, TTL expiry. Process-local only — the same soft boundary the
-console ``/api/ai/command`` has today. A durable executor claim remains the
-gate for real activation documented in docs/TODO.md.
+console ``/api/ai/command`` has today. Real activation stays gated behind
+a durable executor claim (M2), not this store.
 """
 
 import hashlib
