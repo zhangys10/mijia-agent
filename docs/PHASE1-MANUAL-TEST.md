@@ -41,17 +41,21 @@ the output is identical to a UI-issued token; BYOK fields are placeholders.
 
 ```bash
 cd mijia-agent
-set -a; source <(grep -E '^AI_GATEWAY_|^AI_TOOLS_INTERNAL_SECRET|^MIJIA_CONSOLE_BASE_URL' adapters/edgeone/.env); set +a
+set -a; source adapters/edgeone/.env; set +a
 AI_ENVIRONMENT=production \
 AI_LLM_LOG_PATH=/tmp/llm-calls.jsonl \
 .venv/bin/uvicorn mijia_agent.app:create_app --factory --port 8000
 ```
 
+Source the whole file: `Settings` validates `AI_PYTHON_INTERNAL_SECRET` and
+`AI_TOOLS_INTERNAL_SECRET` at startup (each ≥ 32 chars, mutually distinct)
+even if you only test `/ai/command` — a missing internal secret fails with
+"Independent internal and tool secrets must each be at least 32 characters".
+
 This uses the pulled prod values: model access goes through the real Makers
 Gateway, and `/api/ai/tools` calls hit the prod console (which decrypts your
 prod-issued token), so no local console server is needed. `AI_LLM_LOG_PATH`
-writes one JSONL line per model call. `AI_PYTHON_INTERNAL_SECRET` is only
-needed if you also test `/internal/v1/turn` locally.
+writes one JSONL line per model call.
 
 ## 3. Exercise `POST /ai/command` from Postman
 
