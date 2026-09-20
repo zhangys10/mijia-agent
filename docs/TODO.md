@@ -96,6 +96,11 @@ upstream idempotency/observable reconciliation.
 
 ## M4 — Continue original roadmap here
 
+- [x] Add read-only `get_home_status` agent tool: Python advertises the empty-argument
+      tool, fetches the sanitized environment snapshot from the console tools API only
+      after the model selects it, and returns it as `Result.homeStatus` (values never
+      enter model messages or conversation history). Companion console collector,
+      dashboard, and tool facade are tracked in the web console repo.
 - [ ] Web assistant UI stays in console; new repo owns behavior and API evolution.
 - [ ] Siri/Automation Token migration: no model key; same agent, quota and executor; command remains disabled until ready.
 - [ ] Verify Makers scheduler APIs rather than infer them from “scheduled tasks” use cases.

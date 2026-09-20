@@ -2,7 +2,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentError, Execution, Scene, Turn
+from .models import AgentError, Execution, HomeStatus, Scene, Turn
 
 
 class ConsoleTools:
@@ -72,6 +72,13 @@ class ConsoleTools:
                 raise ValueError("duplicate aliases")
             return result
         except (KeyError, TypeError, ValueError, ValidationError):
+            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+
+    async def get_home_status(self, turn: Turn) -> HomeStatus:
+        body = await self.call(turn, "get_home_status", {})
+        try:
+            return HomeStatus.model_validate(body)
+        except ValidationError:
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
 
     async def activate_scene(self, turn: Turn, alias: str) -> Execution:
