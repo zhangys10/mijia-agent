@@ -84,8 +84,9 @@ allowlist, fixed non-thinking mode, bounded output and timeout. No production mo
 is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 2026-09-17; this remains a deployment observation, not a source default.
 
-Only `list_scenes` and `activate_scene` are recognized. Additional arguments,
-multiple tool calls, unknown aliases and invented tools fail closed. Activation also
+Only `list_scenes`, `get_home_status` and `activate_scene` are recognized. Additional
+arguments, multiple tool calls, unknown aliases and invented tools fail closed.
+`get_home_status` is read-only and never opens an execution path. Activation also
 requires `scene:activate` and a conservative explicit-current-command check in Python.
 Negation, conditions, quoted commands and ambiguous language produce clarification.
 The matching grammar is intentionally narrow; broader language requires tests or a
@@ -119,7 +120,10 @@ store need validation. No exactly-once hardware guarantee is claimed.
 - China-first deployment; Makers AI Gateway; env-configured default/override/unlimited user quotas.
 - EdgeOne KV is eventually consistent and supplies soft quotas only; production remains fail-closed.
 - Web assistant first, then Siri/Automation Token using the same authenticated quota path.
-- No user model keys; old `/api/ai/command` remains disabled during migration.
+- No user model keys. Since the console's phase-2 cleanup, `AI_COMMAND_ENABLED` defaults
+  to `false` there and `POST /ai/command` in this repo is the command ingress: a
+  Postman-callable automation-token route sharing the internal turn pipeline's decision
+  core (`src/mijia_agent/command_rules.py`), with every model call logged as JSONL.
 - Preview produces mock text without Gateway/device access.
 - Home Assistant stays a future executor adapter.
 - Inferred/unknown device relationships cannot authorize execution; existing domain semantics stay in the console.

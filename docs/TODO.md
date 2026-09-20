@@ -13,7 +13,31 @@
 - [x] Add locked dependencies, Dockerfile, CI, Python tests and adapter tests.
 - [x] Add the EdgeOne Cloud Functions ASGI entry and deterministic Python package sync.
 
-## M1 — Repository and read-only integration
+## Phase 1 — Postman-callable agent (completed locally)
+
+- [x] Add `/ai/command` ingress with the shared decision core (`command_rules.py`),
+  automation-token bearer auth, `Idempotency-Key` handling, and `AiCommandResponse`
+  parity (`message`/`status`/`intent`/`sceneName`/`execution`/`decisionSource`).
+- [x] Add the JSONL LLM call logger (`llm_log.py`, `AI_LLM_LOG_PATH`, stdout fallback)
+  and wire it into both pipelines' Gateway calls; no tokens, bindings or gateway
+  credentials are ever logged.
+- [x] Console companion: `/api/ai/tools` accepts `X-Ai-User-Token` automation tokens
+  (principal re-derived console-side, BYOK fields ignored, home resolution mirrors
+  `/api/ai/command`); the `sessionBinding` envelope path is unchanged.
+- [x] Add `get_home_status` read-only tool to the Python tool protocol and the console
+  facade (sanitized snapshot; rejected in preview).
+
+## Phase 2 — console cleanup & drift fixes (completed locally)
+
+- [x] Console `AI_COMMAND_ENABLED` default flipped to `false` (`lib/ai/config.ts`); the
+  legacy `/api/ai/command` route stays closed unless explicitly enabled, and this repo's
+  `POST /ai/command` is the command ingress.
+- [x] Docs updated: console `python-agent-extraction.md` documents the token path; this
+  repo's contracts/architecture record the tool list, `/ai/command` contract, response
+  fields, and the LLM call log. The `list_devices` read-only tool remains deferred by
+  plan.
+
+## M1 — Repository and read-only integration — Repository and read-only integration
 
 - [x] Create public `zhangys10/mijia-agent` and publish the extracted project.
 - [x] Verify the first [GitHub CI run](https://github.com/zhangys10/mijia-agent/actions/runs/35288812809): Python lint/format, 33 Python tests, and five adapter tests passed.

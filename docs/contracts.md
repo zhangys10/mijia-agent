@@ -60,6 +60,7 @@ the binding, re-derives the principal from its session, and reloads current home
 |---|---|---|
 | `authorize` | `{}` | `{ "ok": true }` after authentication/home checks; not model-visible |
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount" }] }` |
+| `get_home_status` | `{}` | Read-only sanitized home snapshot (devices by name/room/online/kind, no DIDs or aliases); rejected in preview |
 | `activate_scene` | `{ "sceneId": "scene_<opaque-alias>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until executor gate is complete |
 
 The future executor must refresh the scene, validate alias/home/approval revision/risk,
@@ -100,8 +101,10 @@ same soft boundary the console had — not durable).
 
 ```json
 { "text": "我回家了", "home": "我的家", "locale": "zh-CN", "timezone": "Asia/Shanghai",
-  "conversationId": "conv_example", "history": [{ "role": "user", "content": "…",
-  "role": "assistant", "content": "…" }] }
+  "conversationId": "conv_example", "history": [
+    { "role": "user", "content": "…" },
+    { "role": "assistant", "content": "…" }
+  ] }
 ```
 
 `home` accepts a home ID, exact name, or substring; omitted means the token-bound home,
@@ -128,6 +131,8 @@ gateway keys, or principal IDs ever appear.
 
 The console `/api/ai/tools` accepts the token via the new `X-Ai-User-Token` header
 after the service bearer; the `sessionBinding` envelope path is unchanged. Body uses
-`home` (name or ID) on the token path. When both land, the Python tool list for the
-chat pipeline matches the console contract: `list_scenes`, `get_home_status` (read-only),
-`activate_scene` (disabled).
+`home` (name or ID) on the token path. The Python tool list for both pipelines matches
+the console contract: `list_scenes`, `get_home_status` (read-only), `activate_scene`
+(disabled). Since the console's phase-2 cleanup, `AI_COMMAND_ENABLED` defaults to
+`false` there: the legacy `/api/ai/command` route stays closed and this repo's
+`POST /ai/command` is the only command ingress.
