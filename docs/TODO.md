@@ -34,6 +34,11 @@
   For M1 development, set console `AI_QUOTA_ENABLED=false`: the console returns a
   principal-bound disabled summary and neither side reads or writes a quota ledger. This is
   not cost protection; adapter settlement and quota summaries are deferred to M3.
+  Note (2026-09-20): the console now ships a page AI assistant UI
+  (`app/components/ai-assistant/`) that drives create/chat/delete through the same
+  public Web Chat API, so this remote-mode exercise has a real browser client. No new
+  M1 gates result from the UI; the browser stop button only aborts the local request
+  (there is no public stop route in the frozen contract).
 - [ ] Validate stop propagation on the real Makers runtime, including an in-flight Gateway call.
 - [x] Ensure preview is blocked/mock at the outer console boundary as well as Python.
   Console Web Chat now authenticates and validates the home/conversation before returning the
