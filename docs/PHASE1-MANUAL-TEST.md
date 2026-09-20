@@ -19,11 +19,23 @@ disabled (`AI_SCENE_EXECUTION_DISABLED`) by design.
 
 ## 1. Generate an automation token
 
-1. Open the prod console, log in with your Xiaomi QR account.
-2. 设置 → AI 自动化配置 → 自动化令牌：生成令牌（`v1.<keyId>.<iv>.<ct>.<tag>`）。
-   Optionally bind a home first. The BYOK gateway/model fields in that form
-   are legacy and ignored by the agent.
-3. Copy it — this is the Postman credential (shown once).
+Either via the prod console UI (设置 → AI 自动化配置 → 自动化令牌；the BYOK
+gateway/model fields in that form are legacy and ignored by the agent), or
+offline with the console repo's script:
+
+```bash
+cd mijia-web-console
+AI_AUTOMATION_TOKEN_SECRET="<prod secret>" \
+XIAOMI_SESSION_SECRET="<console secret>" \
+node --experimental-strip-types scripts/generate-automation-token.ts \
+  --session '<xiaomi_session cookie value from the logged-in browser>' \
+  --days 7 --out /tmp/automation-token.txt
+# Postman header: Authorization: Bearer $(cat /tmp/automation-token.txt)
+```
+
+`--session` is the sealed `xiaomi_session` cookie value (DevTools →
+Application → Cookies). The script uses the console's own token library, so
+the output is identical to a UI-issued token; BYOK fields are placeholders.
 
 ## 2. Start the Python agent locally against the prod gateway + console
 
