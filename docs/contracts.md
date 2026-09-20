@@ -86,3 +86,48 @@ The new adapter stop route uses the platform conversation header, authenticated
 principal/home/binding envelope, and `conversation_id` equal to the current platform
 conversation. Cancellation aborts the HTTP call; it cannot undo an already dispatched
 device action. No successful physical cancellation is implied.
+
+## Postman/Siri → Python (`POST /ai/command`, Phase 1)
+
+New direct ingress replacing the console's `/api/ai/command` for external clients.
+`Authorization: Bearer <console-issued automation token>` (`v1.…`, ≤ 8192 chars).
+The token is opaque to Python: the console decrypts it in `/api/ai/tools`, re-derives
+the principal, and resolves the home. Python never opens it, logs it, or uses its BYOK
+provider fields. Optional `Idempotency-Key` header (16–128 chars) becomes mandatory
+once an action is selected; replay returns the completed response, same-key/different-body
+conflicts return 409, concurrent duplicates return 202 processing (process-local store,
+same soft boundary the console had — not durable).
+
+```json
+{ "text": "我回家了", "home": "我的家", "locale": "zh-CN", "timezone": "Asia/Shanghai",
+  "conversationId": "conv_example", "history": [{ "role": "user", "content": "…",
+  "role": "assistant", "content": "…" }] }
+```
+
+`home` accepts a home ID, exact name, or substring; omitted means the token-bound home,
+then the account's first home. `history` is at most 32 messages; each is trimmed to 300
+chars. Success responses mirror the console `AiCommandResponse`:
+
+```json
+{ "requestId": "req_…", "conversationId": "conv_…", "conversationReset": false,
+  "turnIndex": 1, "status": "completed", "intent": "activate_scene",
+  "sceneId": "scene_<opaque-alias>", "sceneName": "回家模式",
+  "message": "好的，已开启回家模式", "execution": { "status": "success", "succeeded": 1,
+  "failed": 0 }, "decisionSource": "llm", "llmOutput": "…" }
+```
+
+Executor status always wins over model text. Public error codes: `LLM_TIMEOUT` (504),
+`LLM_PROVIDER_ERROR` (502), `MI_CLOUD_ERROR` (502), `DEVICE_TIMEOUT` (504),
+`AUTOMATION_TOKEN_EXPIRED`/`AUTOMATION_TOKEN_INVALID` (401), `AI_HOME_NOT_FOUND` (404),
+`IDEMPOTENCY_CONFLICT` (409), `INVALID_REQUEST` (400), `UNAUTHORIZED` (401), and
+`AI_SCENE_EXECUTION_DISABLED` (403) — activation remains closed until the durable
+executor claim (M2). `GET /ai/command` returns an info summary. Every model call is
+logged as JSONL (`AI_LLM_LOG_PATH`, stdout by default): request payload, bounded
+response excerpt, usage, latency, `llm_call_failed` on error — no tokens, bindings,
+gateway keys, or principal IDs ever appear.
+
+The console `/api/ai/tools` accepts the token via the new `X-Ai-User-Token` header
+after the service bearer; the `sessionBinding` envelope path is unchanged. Body uses
+`home` (name or ID) on the token path. When both land, the Python tool list for the
+chat pipeline matches the console contract: `list_scenes`, `get_home_status` (read-only),
+`activate_scene` (disabled).
