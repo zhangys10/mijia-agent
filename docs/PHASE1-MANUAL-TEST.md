@@ -7,39 +7,39 @@ disabled (`AI_SCENE_EXECUTION_DISABLED`) by design.
 ## Prerequisites
 
 - Python 3.11+ with repo deps (`mijia-agent/.venv` is already set up).
-- Console dev server: in `mijia-web-console`, copy `.env.example` → `.env.local`,
-  make sure these are set:
-  - `XIAOMI_SESSION_SECRET`, `AI_PRINCIPAL_SECRET` (each ≥ 32 chars, distinct),
-  - `AI_AUTOMATION_TOKEN_SECRET` (≥ 32 chars) — the automation token encrypts with this,
-  - `AI_TOOLS_INTERNAL_SECRET` (≥ 32 chars) — must match the agent's,
-  - `AI_SCENE_APPROVED_IDS` — at least one approved scene ID for your home.
-- Start the console: `npm run dev` (default `http://localhost:3000`).
+- Prod credentials via the EdgeOne CLI: `edgeone makers env pull` (or
+  `edgeone makers dev`, which syncs them) writes the prod env — including
+  `AI_GATEWAY_API_KEY/BASE_URL/MODEL/ALLOWED_MODELS`, `AI_TOOLS_INTERNAL_SECRET`,
+  and `MIJIA_CONSOLE_BASE_URL` — into `adapters/edgeone/.env`. The
+  gateway/model fields in the console automation-token UI are legacy BYOK;
+  the agent ignores them, so no per-user key is needed.
+- An automation token (`v1.…`) issued by the **prod** console settings UI
+  (设置 → AI 自动化配置) — the token must be signed with the same
+  `AI_AUTOMATION_TOKEN_SECRET` the prod console uses to decrypt it.
 
 ## 1. Generate an automation token
 
-1. Log into the console UI with your Xiaomi QR account.
-2. Open the automation-token settings UI and generate a token
-   (a `v1.<keyId>.<iv>.<ct>.<tag>` string). Optionally bind a home first.
-3. Copy it — this is the Postman credential.
+1. Open the prod console, log in with your Xiaomi QR account.
+2. 设置 → AI 自动化配置 → 自动化令牌：生成令牌（`v1.<keyId>.<iv>.<ct>.<tag>`）。
+   Optionally bind a home first. The BYOK gateway/model fields in that form
+   are legacy and ignored by the agent.
+3. Copy it — this is the Postman credential (shown once).
 
-## 2. Start the Python agent locally
+## 2. Start the Python agent locally against the prod gateway + console
 
 ```bash
 cd mijia-agent
-AI_PYTHON_INTERNAL_SECRET="local-dev-internal-secret-0123456789" \
-AI_TOOLS_INTERNAL_SECRET="local-dev-tools-secret-01234567890" \
-AI_GATEWAY_API_KEY="<your makers gateway key>" \
-AI_GATEWAY_BASE_URL="https://<your makers gateway>/v1" \
-MIJIA_CONSOLE_BASE_URL="http://localhost:3000" \
-AI_GATEWAY_MODEL="<allowed-model>" \
-AI_GATEWAY_ALLOWED_MODELS="<allowed-model>" \
-AI_ENVIRONMENT=development \
+set -a; source <(grep -E '^AI_GATEWAY_|^AI_TOOLS_INTERNAL_SECRET|^MIJIA_CONSOLE_BASE_URL' adapters/edgeone/.env); set +a
+AI_ENVIRONMENT=production \
 AI_LLM_LOG_PATH=/tmp/llm-calls.jsonl \
 .venv/bin/uvicorn mijia_agent.app:create_app --factory --port 8000
 ```
 
-`AI_ENVIRONMENT=development` permits the localhost console URL and preview
-behavior stays off. `AI_LLM_LOG_PATH` writes one JSONL line per model call.
+This uses the pulled prod values: model access goes through the real Makers
+Gateway, and `/api/ai/tools` calls hit the prod console (which decrypts your
+prod-issued token), so no local console server is needed. `AI_LLM_LOG_PATH`
+writes one JSONL line per model call. `AI_PYTHON_INTERNAL_SECRET` is only
+needed if you also test `/internal/v1/turn` locally.
 
 ## 3. Exercise `POST /ai/command` from Postman
 
@@ -74,7 +74,8 @@ Each line has `event: llm_call` (request/response excerpt/usage/latency) or
 
 ## 4. Cross-check the web chat path is untouched
 
-With the console dev server up, open the assistant panel in the browser and
-send a message: it must behave exactly as before (it goes
-`/api/ai/chat` → adapter → `POST /internal/v1/turn`, now with prompt parity
-plus `get_home_status` read-only support).
+Open the deployed console's assistant panel in the browser and send a message:
+it must behave exactly as before (it goes `/api/ai/chat` → prod adapter →
+`POST /internal/v1/turn`, now with prompt parity plus `get_home_status`
+read-only support). The prod adapter only gains these behaviors after the
+Phase 1 branch is deployed — until then it reflects the current prod build.
