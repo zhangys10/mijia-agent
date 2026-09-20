@@ -124,7 +124,13 @@ store need validation. No exactly-once hardware guarantee is claimed.
 - China-first deployment; Makers AI Gateway; env-configured default/override/unlimited user quotas.
 - EdgeOne KV is eventually consistent and supplies soft quotas only; production remains fail-closed.
 - Web assistant first, then Siri/Automation Token using the same authenticated quota path.
-- No user model keys; old `/api/ai/command` remains disabled during migration.
+- No user model keys. The console's phase-3 retirement removed its legacy command
+  implementation: `/api/ai/command` returns `410 AI_COMMAND_RETIRED`, and
+  `POST /ai/command` in this repo is the command ingress — a Postman-callable
+  automation-token route sharing the internal turn pipeline's decision core
+  (`src/mijia_agent/command_rules.py`), with every model call logged as JSONL. Console
+  token generation no longer carries BYOK fields; the token is a session+home
+  credential for this ingress.
 - Preview produces mock text without Gateway/device access.
 - Home Assistant stays a future executor adapter.
 - Inferred/unknown device relationships cannot authorize execution; existing domain semantics stay in the console.

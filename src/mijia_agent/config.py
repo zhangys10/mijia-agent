@@ -30,6 +30,7 @@ class Settings:
     timeout_ms: int = 5000
     max_output_tokens: int = 256
     environment: str = "production"
+    llm_log_path: str = field(repr=False, default="")
 
     def __post_init__(self):
         if len(self.internal_secret) < 32 or len(self.tools_secret) < 32:
@@ -66,4 +67,5 @@ class Settings:
             timeout_ms=int(env.get("AI_GATEWAY_TIMEOUT_MS", "5000")),
             max_output_tokens=int(env.get("AI_GATEWAY_MAX_OUTPUT_TOKENS", "256")),
             environment=env.get("AI_ENVIRONMENT", "production"),
+            llm_log_path=env.get("AI_LLM_LOG_PATH", ""),
         )

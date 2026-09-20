@@ -102,6 +102,7 @@ class Decision(StrictModel):
     tool: Literal["none", "list_scenes", "get_home_status", "activate_scene"]
     sceneId: str | None = None
     message: str = ""
+    replyMessage: str = ""
     usage: Usage = Field(default_factory=Usage)
 
 

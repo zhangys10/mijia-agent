@@ -181,6 +181,19 @@ def test_readonly_payload_does_not_advertise_activation():
         "list_scenes",
         "get_home_status",
     ]
+    assert payload(turn(), [SCENE], settings())["tools"][-1]["function"]["name"] == (
+        "activate_scene"
+    )
+
+
+def test_chat_payload_shares_command_router_prompt_and_schema():
+    request = payload(turn(), [SCENE], settings())
+    system = request["messages"][0]
+    assert system["role"] == "system"
+    assert "家庭控制意图路由器" in system["content"]
+    assert "replyMessage" in json.dumps(request["tools"])
+    assert request["enable_thinking"] is False
+    assert request["temperature"] == 0
 
 
 def test_home_status_query_fetches_after_decision_and_returns_structured_result():
