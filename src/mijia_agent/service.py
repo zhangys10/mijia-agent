@@ -1,7 +1,16 @@
 import re
 from typing import Protocol
 
-from .models import AgentError, Decision, Execution, Result, Scene, ToolResult, Turn
+from .models import (
+    AgentError,
+    Decision,
+    Execution,
+    HomeStatus,
+    Result,
+    Scene,
+    ToolResult,
+    Turn,
+)
 
 
 class Provider(Protocol):
@@ -10,6 +19,7 @@ class Provider(Protocol):
 
 class Tools(Protocol):
     async def list_scenes(self, turn: Turn) -> list[Scene]: ...
+    async def get_home_status(self, turn: Turn) -> HomeStatus: ...
     async def activate_scene(self, turn: Turn, alias: str) -> Execution: ...
 
 
@@ -53,6 +63,26 @@ class AgentService:
                 intent="list_scenes",
                 scenes=scenes,
                 tool=ToolResult(name="list_scenes", status="success"),
+            )
+        if decision.tool == "get_home_status":
+            try:
+                status = await self.tools.get_home_status(turn)
+            except AgentError as error:
+                error.usage = decision.usage
+                raise
+            # Readings stay out of the reply text: values enter the structured field only,
+            # so conversation history and later model turns never carry measurements.
+            return Result(
+                **base,
+                message="当前家庭暂无可用的环境读数。"
+                if status.completeness == "empty"
+                else "已读取当前家庭环境状态。",
+                intent="get_home_status",
+                homeStatus=status,
+                tool=ToolResult(
+                    name="get_home_status",
+                    status="partial_success" if status.completeness == "partial" else "success",
+                ),
             )
         if "scene:activate" not in turn.scopes:
             raise AgentError("AI_SCOPE_FORBIDDEN", 403, decision.usage)
