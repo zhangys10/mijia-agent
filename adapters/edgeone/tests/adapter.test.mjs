@@ -60,6 +60,30 @@ test("uncertain upstream outcome never automatically reruns", async t => {
   assert.equal(calls, 1);
 });
 
+test("structured homeStatus survives forwarding, receipt storage, and replay without entering history", async t => {
+  const { context, history } = fixture();
+  const homeStatus = {
+    capturedAt: "2026-09-20T08:00:00Z",
+    completeness: "partial",
+    groups: [{ metric: "temperature", label: "温度", unit: "°C", latest: { value: 25.5, unit: "°C", sourceLabel: "客厅温湿度计", roomName: "客厅", capturedAt: "2026-09-20T08:00:00Z", freshness: "fresh" }, readings: [] }],
+    warnings: ["部分设备读取失败"],
+  };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭环境状态。", intent: "get_home_status", homeStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
+  });
+  const first = await (await onRequest(context)).json();
+  assert.deepEqual(first.homeStatus, homeStatus);
+  // Only the generic message enters conversation history, never the structured readings.
+  assert.equal([...history.values()][0][1].content, "已读取当前家庭环境状态。");
+  context.request.body.requestId = "req_example_000002";
+  const replay = await (await onRequest(context)).json();
+  assert.deepEqual(replay.homeStatus, homeStatus);
+  assert.equal(replay.requestId, "req_example_000002");
+  assert.equal(replay.usage.totalTokens, 0);
+});
+
 test("finalized upstream failure replay retains known model usage", async t => {
   const { context, history } = fixture();
   let calls = 0;

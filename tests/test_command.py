@@ -683,7 +683,22 @@ def test_internal_turn_get_home_status_end_to_end_with_fake_console():
     snapshot = {
         "capturedAt": "2026-09-20T08:00:00Z",
         "completeness": "partial",
-        "groups": [{"metric": "temperature", "label": "温度"}],
+        "groups": [
+            {
+                "metric": "temperature",
+                "label": "温度",
+                "unit": "°C",
+                "latest": {
+                    "value": 25.5,
+                    "unit": "°C",
+                    "sourceLabel": "客厅温湿度计",
+                    "roomName": "客厅",
+                    "capturedAt": "2026-09-20T08:00:00Z",
+                    "freshness": "fresh",
+                },
+                "readings": [],
+            }
+        ],
         "warnings": [],
     }
     seen = []

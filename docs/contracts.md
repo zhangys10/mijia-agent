@@ -60,8 +60,40 @@ the binding, re-derives the principal from its session, and reloads current home
 |---|---|---|
 | `authorize` | `{}` | `{ "ok": true }` after authentication/home checks; not model-visible |
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount" }] }` |
-| `get_home_status` | `{}` | Read-only sanitized home snapshot (devices by name/room/online/kind, no DIDs or aliases); rejected in preview |
+| `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `activate_scene` | `{ "sceneId": "scene_<opaque-alias>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until executor gate is complete |
+
+`get_home_status` aggregates readings from any supported devices and returns a strict
+sanitized object (never DIDs, raw property addresses, or Xiaomi records):
+
+```json
+{
+  "capturedAt": "2026-09-20T08:00:00Z",
+  "completeness": "complete | partial | empty",
+  "groups": [
+    {
+      "metric": "temperature | humidity | co2 | formaldehyde | pm25 | pm10 | tvoc | pressure | battery",
+      "label": "温度",
+      "unit": "°C",
+      "latest": {
+        "value": 25.5,
+        "unit": "°C",
+        "sourceLabel": "客厅温湿度计",
+        "roomName": "客厅",
+        "capturedAt": "2026-09-20T08:00:00Z",
+        "freshness": "fresh | stale"
+      },
+      "readings": [ { "..." : "same shape as latest" } ]
+    }
+  ],
+  "warnings": ["部分设备读取失败"]
+}
+```
+
+Python validates this shape strictly (`extra="forbid"`, bounded lists and strings) and
+forwards it as `Result.homeStatus`. Readings are fetched only after the model selects
+the tool; they never enter model messages, replies, or conversation history. The reply
+text is a generic statement; the browser assistant renders the structured readings.
 
 The future executor must refresh the scene, validate alias/home/approval revision/risk,
 claim a durable execution receipt, and return only `status` and `message`. It must not

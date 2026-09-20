@@ -2,7 +2,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentError, Execution, Scene, Turn
+from .models import AgentError, Execution, HomeStatus, Scene, Turn
 
 
 class ConsoleTools:
@@ -74,16 +74,16 @@ class ConsoleTools:
         except (KeyError, TypeError, ValueError, ValidationError):
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
 
+    async def get_home_status(self, turn: Turn) -> HomeStatus:
+        body = await self.call(turn, "get_home_status", {})
+        try:
+            return HomeStatus.model_validate(body)
+        except ValidationError:
+            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+
     async def activate_scene(self, turn: Turn, alias: str) -> Execution:
         body = await self.call(turn, "activate_scene", {"sceneId": alias})
         try:
             return Execution.model_validate(body)
         except ValidationError:
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
-
-    async def get_home_status(self, turn: Turn) -> dict:
-        """Read-only environment snapshot; passed through with shape checks only."""
-        body = await self.call(turn, "get_home_status", {})
-        if not isinstance(body, dict):
-            raise AgentError("AI_AGENT_UNAVAILABLE")
-        return body

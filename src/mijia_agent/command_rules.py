@@ -39,7 +39,8 @@ CHAT_TOOLS_ADDENDUM = """
 
 【只读工具补充（仅网页对话）】
 10. 当用户想了解当前家庭有哪些可用场景时，调用 list_scenes 工具。
-11. 当用户询问家中环境状态（如温度、湿度、空气质量）时，调用 get_home_status 工具。
+11. 当用户询问温度、湿度、空气质量、甲醛、二氧化碳等环境数据时，调用 get_home_status 工具；
+它只读且无参数，读数由系统返回，不得自行编造任何数值或单位。
 12. list_scenes 与 get_home_status 是只读查询，不会执行任何设备操作；除查询外的场景意图仍必须调用 activate_scene。"""
 
 FALLBACK_PHRASES = (

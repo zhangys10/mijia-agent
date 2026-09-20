@@ -10,7 +10,17 @@ from mijia_agent.app import create_app
 from mijia_agent.config import Settings
 from mijia_agent.console import ConsoleTools
 from mijia_agent.gateway import Gateway, payload
-from mijia_agent.models import AgentError, Decision, Execution, Scene, Turn, Usage
+from mijia_agent.models import (
+    AgentError,
+    Decision,
+    Execution,
+    HomeStatus,
+    HomeStatusGroup,
+    HomeStatusReading,
+    Scene,
+    Turn,
+    Usage,
+)
 from mijia_agent.service import AgentService
 
 
@@ -44,6 +54,27 @@ SCENE = Scene(
     alias="scene_0123456789abcdef", name="回家模式", description="已审核低风险场景", actionCount=1
 )
 USAGE = Usage(promptTokens=10, completionTokens=5, totalTokens=15)
+STATUS_READING = HomeStatusReading(
+    value=25.5,
+    unit="°C",
+    sourceLabel="客厅温湿度计",
+    roomName="客厅",
+    capturedAt="2026-09-20T08:00:00Z",
+)
+STATUS = HomeStatus(
+    capturedAt="2026-09-20T08:00:00Z",
+    completeness="partial",
+    groups=[
+        HomeStatusGroup(
+            metric="temperature",
+            label="温度",
+            unit="°C",
+            latest=STATUS_READING,
+            readings=[STATUS_READING],
+        )
+    ],
+    warnings=["部分设备读取失败"],
+)
 
 
 class FakeProvider:
@@ -62,12 +93,7 @@ class FakeTools:
     def __init__(self):
         self.calls = []
         self.result = Execution(status="success", message="已执行回家模式。")
-        self.home_status = {
-            "capturedAt": "2026-09-20T08:00:00Z",
-            "completeness": "partial",
-            "groups": [],
-            "warnings": [],
-        }
+        self.status = STATUS
 
     async def list_scenes(self, turn):
         self.calls.append(("list", turn.principalId, turn.homeId))
@@ -75,7 +101,7 @@ class FakeTools:
 
     async def get_home_status(self, turn):
         self.calls.append(("status", turn.principalId, turn.homeId))
-        return self.home_status
+        return self.status
 
     async def activate_scene(self, turn, alias):
         self.calls.append(("activate", turn.principalId, turn.homeId, alias))
@@ -170,14 +196,69 @@ def test_chat_payload_shares_command_router_prompt_and_schema():
     assert request["temperature"] == 0
 
 
-def test_home_status_decision_returns_read_only_snapshot():
+def test_home_status_query_fetches_after_decision_and_returns_structured_result():
     tools = FakeTools()
-    provider = FakeProvider(Decision(tool="get_home_status"))
-    result = asyncio.run(AgentService(provider, tools).run(turn()))
+    provider = FakeProvider(Decision(tool="get_home_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(message="现在室内温度多少")))
     assert result.intent == "get_home_status"
-    assert result.homeStatus == tools.home_status
-    assert result.tool.name == "get_home_status"
-    assert ("status", "usr_example", "home-example") in tools.calls
+    assert result.message == "已读取当前家庭环境状态。"
+    assert result.homeStatus == STATUS
+    assert result.tool is not None and result.tool.name == "get_home_status"
+    assert result.tool.status == "partial_success"
+    # Readings stay out of the reply text, so they never enter later model history.
+    assert "25.5" not in result.message
+    assert tools.calls[-1] == ("status", "usr_example", "home-example")
+
+
+def test_home_status_query_needs_only_chat_scope():
+    tools = FakeTools()
+    provider = FakeProvider(Decision(tool="get_home_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(scopes=["ai:chat"])))
+    assert result.intent == "get_home_status"
+    assert tools.calls[-1] == ("status", "usr_example", "home-example")
+
+
+def test_empty_home_status_reports_empty():
+    tools = FakeTools()
+    tools.status = HomeStatus(capturedAt="2026-09-20T08:00:00Z", completeness="empty")
+    provider = FakeProvider(Decision(tool="get_home_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(message="家里空气质量如何")))
+    assert result.message == "当前家庭暂无可用的环境读数。"
+    assert result.homeStatus is not None and result.homeStatus.groups == []
+    assert result.tool.status == "success"
+
+
+def test_home_status_tool_failure_retains_usage():
+    class FailingTools(FakeTools):
+        async def get_home_status(self, turn):
+            self.calls.append(("status", turn.principalId, turn.homeId))
+            raise AgentError("AI_AGENT_UNAVAILABLE")
+
+    tools = FailingTools()
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(
+            AgentService(FakeProvider(Decision(tool="get_home_status", usage=USAGE)), tools).run(
+                turn()
+            )
+        )
+    assert caught.value.usage == USAGE
+
+
+def test_home_status_result_never_carries_identifiers():
+    tools = FakeTools()
+    provider = FakeProvider(Decision(tool="get_home_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(message="家里湿度如何")))
+    raw = json.dumps(result.model_dump(exclude_none=True), ensure_ascii=False)
+    for forbidden in [
+        "usr_example",
+        "home-example",
+        "fake-opaque-binding",
+        "scene_0123456789abcdef",
+        "did",
+        "siid",
+        "piid",
+    ]:
+        assert forbidden not in raw
 
 
 def gateway_response(message, usage=None):
@@ -208,6 +289,22 @@ def test_gateway_contract_and_exact_usage():
     assert result.usage == USAGE
 
 
+def test_gateway_accepts_exact_home_status_call():
+    result = gateway_run(
+        lambda _: gateway_response(
+            {
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "get_home_status", "arguments": "{}"},
+                    }
+                ]
+            }
+        )
+    )
+    assert result.tool == "get_home_status"
+
+
 def test_gateway_missing_usage_estimates_full_tool_call():
     result = gateway_run(
         lambda _: gateway_response(
@@ -234,6 +331,7 @@ def test_gateway_missing_usage_estimates_full_tool_call():
         ("activate_scene", {"sceneId": "invented"}),
         ("activate_scene", {"sceneId": SCENE.alias, "homeId": "other"}),
         ("list_scenes", {"unexpected": 1}),
+        ("get_home_status", {"metric": "temperature"}),
     ],
 )
 def test_gateway_rejects_invented_tools_and_extra_arguments(name, args):
@@ -279,6 +377,7 @@ def test_tool_client_passes_only_scoped_envelope():
         body = json.loads(request.content)
         assert body["sessionBinding"] == "fake-opaque-binding"
         assert body["principalId"] == "usr_example"
+        assert body["tool"] == "list_scenes"
         assert "history" not in body and "message" not in body
         return httpx.Response(200, json={"scenes": [SCENE.model_dump()]})
 
@@ -288,6 +387,48 @@ def test_tool_client_passes_only_scoped_envelope():
 
     assert asyncio.run(execute()) == [SCENE]
     assert len(requests) == 1
+
+
+def test_status_tool_client_validates_strictly():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        body = json.loads(request.content)
+        assert body["tool"] == "get_home_status" and body["arguments"] == {}
+        return httpx.Response(200, json=STATUS.model_dump())
+
+    async def execute():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await ConsoleTools(settings(), client).get_home_status(turn())
+
+    assert asyncio.run(execute()) == STATUS
+
+
+def test_status_tool_client_rejects_malformed_or_leaky_payloads():
+    leaked = STATUS.model_dump()
+    leaked["deviceIds"] = ["did-123456789"]
+    malformed = [
+        {"completeness": "complete"},  # missing capturedAt
+        {**STATUS.model_dump(), "extra": True},
+        {**STATUS.model_dump(), "groups": [{"metric": "hackers"}]},
+        {
+            **STATUS.model_dump(),
+            "groups": [{"metric": "temperature", "readings": [{"value": "25"}]}],
+        },
+        leaked,
+    ]
+    for payload_json in malformed:
+
+        def handler(request, payload_json=payload_json):
+            return httpx.Response(200, json=payload_json)
+
+        async def execute():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                await ConsoleTools(settings(), client).get_home_status(turn())
+
+        with pytest.raises(AgentError, match="AI_AGENT_UNAVAILABLE"):
+            asyncio.run(execute())
 
 
 def test_tool_timeout_never_retries():
@@ -309,7 +450,8 @@ def test_tool_timeout_never_retries():
 
 def test_http_auth_validation_no_store_and_response():
     config = settings()
-    app = create_app(config, AgentService(FakeProvider(), FakeTools()))
+    provider = FakeProvider(Decision(tool="get_home_status", usage=USAGE))
+    app = create_app(config, AgentService(provider, FakeTools()))
     data = turn().model_dump()
     data["sessionBinding"] = "fake-opaque-binding"
     with TestClient(app) as client:
@@ -318,6 +460,9 @@ def test_http_auth_validation_no_store_and_response():
         response = client.post("/internal/v1/turn", headers=headers, json=data)
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
+        body = response.json()
+        assert body["intent"] == "get_home_status"
+        assert body["homeStatus"]["groups"][0]["metric"] == "temperature"
         response = client.post(
             "/internal/v1/turn", headers=headers, json=data | {"userId": "sensitive-value"}
         )

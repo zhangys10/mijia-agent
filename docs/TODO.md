@@ -55,7 +55,7 @@
 - [x] Docs refreshed: contracts/architecture note the retirement and no-BYOK tokens;
   this TODO's M3 cleanup item is marked done below.
 
-## M1 — Repository and read-only integration — Repository and read-only integration
+## M1 — Repository and read-only integration
 
 - [x] Create public `zhangys10/mijia-agent` and publish the extracted project.
 - [x] Verify the first [GitHub CI run](https://github.com/zhangys10/mijia-agent/actions/runs/35288812809): Python lint/format, 33 Python tests, and five adapter tests passed.
@@ -76,6 +76,11 @@
   For M1 development, set console `AI_QUOTA_ENABLED=false`: the console returns a
   principal-bound disabled summary and neither side reads or writes a quota ledger. This is
   not cost protection; adapter settlement and quota summaries are deferred to M3.
+  Note (2026-09-20): the console now ships a page AI assistant UI
+  (`app/components/ai-assistant/`) that drives create/chat/delete through the same
+  public Web Chat API, so this remote-mode exercise has a real browser client. No new
+  M1 gates result from the UI; the browser stop button only aborts the local request
+  (there is no public stop route in the frozen contract).
 - [ ] Validate stop propagation on the real Makers runtime, including an in-flight Gateway call.
 - [x] Ensure preview is blocked/mock at the outer console boundary as well as Python.
   Console Web Chat now authenticates and validates the home/conversation before returning the
@@ -136,6 +141,11 @@ upstream idempotency/observable reconciliation.
 
 ## M4 — Continue original roadmap here
 
+- [x] Add read-only `get_home_status` agent tool: Python advertises the empty-argument
+      tool, fetches the sanitized environment snapshot from the console tools API only
+      after the model selects it, and returns it as `Result.homeStatus` (values never
+      enter model messages or conversation history). Companion console collector,
+      dashboard, and tool facade are tracked in the web console repo.
 - [ ] Web assistant UI stays in console; new repo owns behavior and API evolution.
 - [ ] Siri/Automation Token migration: no model key; same agent, quota and executor; command remains disabled until ready.
 - [ ] Verify Makers scheduler APIs rather than infer them from “scheduled tasks” use cases.
