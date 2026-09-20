@@ -55,9 +55,10 @@ class Usage(StrictModel):
 
 
 class Decision(StrictModel):
-    tool: Literal["none", "list_scenes", "activate_scene"]
+    tool: Literal["none", "list_scenes", "get_home_status", "activate_scene"]
     sceneId: str | None = None
     message: str = ""
+    replyMessage: str = ""
     usage: Usage = Field(default_factory=Usage)
 
 
@@ -67,7 +68,7 @@ class Execution(StrictModel):
 
 
 class ToolResult(StrictModel):
-    name: Literal["list_scenes", "activate_scene"]
+    name: Literal["list_scenes", "get_home_status", "activate_scene"]
     status: Literal["success", "partial_success"]
     sceneName: str | None = None
 
@@ -76,9 +77,10 @@ class Result(StrictModel):
     requestId: str
     conversationId: str
     message: str
-    intent: Literal["none", "list_scenes", "activate_scene"]
+    intent: Literal["none", "list_scenes", "get_home_status", "activate_scene"]
     tool: ToolResult | None = None
     scenes: list[Scene] | None = None
+    homeStatus: dict | None = None
     usage: Usage = Field(default_factory=Usage)
 
 

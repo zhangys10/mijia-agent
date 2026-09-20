@@ -10,6 +10,7 @@ class Provider(Protocol):
 
 class Tools(Protocol):
     async def list_scenes(self, turn: Turn) -> list[Scene]: ...
+    async def get_home_status(self, turn: Turn) -> dict: ...
     async def activate_scene(self, turn: Turn, alias: str) -> Execution: ...
 
 
@@ -53,6 +54,15 @@ class AgentService:
                 intent="list_scenes",
                 scenes=scenes,
                 tool=ToolResult(name="list_scenes", status="success"),
+            )
+        if decision.tool == "get_home_status":
+            home_status = await self.tools.get_home_status(turn)
+            return Result(
+                **base,
+                message="当前家中环境状态如下。",
+                intent="get_home_status",
+                homeStatus=home_status,
+                tool=ToolResult(name="get_home_status", status="success"),
             )
         if "scene:activate" not in turn.scopes:
             raise AgentError("AI_SCOPE_FORBIDDEN", 403, decision.usage)

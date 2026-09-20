@@ -80,3 +80,10 @@ class ConsoleTools:
             return Execution.model_validate(body)
         except ValidationError:
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
+
+    async def get_home_status(self, turn: Turn) -> dict:
+        """Read-only environment snapshot; passed through with shape checks only."""
+        body = await self.call(turn, "get_home_status", {})
+        if not isinstance(body, dict):
+            raise AgentError("AI_AGENT_UNAVAILABLE")
+        return body

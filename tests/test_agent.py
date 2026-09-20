@@ -62,10 +62,20 @@ class FakeTools:
     def __init__(self):
         self.calls = []
         self.result = Execution(status="success", message="已执行回家模式。")
+        self.home_status = {
+            "capturedAt": "2026-09-20T08:00:00Z",
+            "completeness": "partial",
+            "groups": [],
+            "warnings": [],
+        }
 
     async def list_scenes(self, turn):
         self.calls.append(("list", turn.principalId, turn.homeId))
         return [SCENE]
+
+    async def get_home_status(self, turn):
+        self.calls.append(("status", turn.principalId, turn.homeId))
+        return self.home_status
 
     async def activate_scene(self, turn, alias):
         self.calls.append(("activate", turn.principalId, turn.homeId, alias))
@@ -141,7 +151,33 @@ def test_model_payload_has_no_credentials_or_identity():
 
 def test_readonly_payload_does_not_advertise_activation():
     request = payload(turn(scopes=["ai:chat"]), [SCENE], settings())
-    assert [tool["function"]["name"] for tool in request["tools"]] == ["list_scenes"]
+    assert [tool["function"]["name"] for tool in request["tools"]] == [
+        "list_scenes",
+        "get_home_status",
+    ]
+    assert payload(turn(), [SCENE], settings())["tools"][-1]["function"]["name"] == (
+        "activate_scene"
+    )
+
+
+def test_chat_payload_shares_command_router_prompt_and_schema():
+    request = payload(turn(), [SCENE], settings())
+    system = request["messages"][0]
+    assert system["role"] == "system"
+    assert "家庭控制意图路由器" in system["content"]
+    assert "replyMessage" in json.dumps(request["tools"])
+    assert request["enable_thinking"] is False
+    assert request["temperature"] == 0
+
+
+def test_home_status_decision_returns_read_only_snapshot():
+    tools = FakeTools()
+    provider = FakeProvider(Decision(tool="get_home_status"))
+    result = asyncio.run(AgentService(provider, tools).run(turn()))
+    assert result.intent == "get_home_status"
+    assert result.homeStatus == tools.home_status
+    assert result.tool.name == "get_home_status"
+    assert ("status", "usr_example", "home-example") in tools.calls
 
 
 def gateway_response(message, usage=None):
