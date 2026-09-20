@@ -43,6 +43,7 @@ the output is identical to a UI-issued token; BYOK fields are placeholders.
 cd mijia-agent
 set -a; source adapters/edgeone/.env; set +a
 AI_ENVIRONMENT=production \
+AI_GATEWAY_ALLOWED_MODELS="$AI_GATEWAY_MODEL" \
 AI_LLM_LOG_PATH=/tmp/llm-calls.jsonl \
 .venv/bin/uvicorn mijia_agent.app:create_app --factory --port 8000
 ```
@@ -51,6 +52,10 @@ Source the whole file: `Settings` validates `AI_PYTHON_INTERNAL_SECRET` and
 `AI_TOOLS_INTERNAL_SECRET` at startup (each ≥ 32 chars, mutually distinct)
 even if you only test `/ai/command` — a missing internal secret fails with
 "Independent internal and tool secrets must each be at least 32 characters".
+`AI_GATEWAY_ALLOWED_MODELS` is overridden from `AI_GATEWAY_MODEL` because
+the pulled file may carry a stale local allowlist (e.g. `test-model`) while
+the model id is the real prod one (`@makers/…`); `Settings` requires the
+model to be inside the allowlist.
 
 This uses the pulled prod values: model access goes through the real Makers
 Gateway, and `/api/ai/tools` calls hit the prod console (which decrypts your
