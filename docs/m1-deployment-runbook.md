@@ -1,7 +1,8 @@
 # M1 deployment runbook
 
 This runbook completes the remaining M1 read-only integration checks. It does not enable
-physical scene execution or production cutover. Keep `AI_COMMAND_ENABLED=false`, keep the
+physical scene execution or production cutover. Keep the console's legacy command route
+retired (phase 3: `410 AI_COMMAND_RETIRED`), keep the
 console executor returning `AI_SCENE_EXECUTION_DISABLED`, and use only synthetic or approved
 read-only requests.
 
@@ -127,7 +128,7 @@ After section 5 is configured:
 
 1. Set the development console's `AI_AGENT_BASE_URL` to the adapter's HTTPS origin, set
    `AI_QUOTA_ENABLED=false`, and redeploy. Non-loopback HTTP origins must be rejected.
-2. Keep `AI_COMMAND_ENABLED=false` and the physical executor disabled.
+2. Keep the legacy console command route retired and the physical executor disabled.
 3. With logged-in principal A, create a conversation, chat to list scenes, reuse the handle,
    read quota, delete the conversation, then verify the same handle starts with empty Agent
    memory. Both chat and quota API must report disabled quota with null counters.

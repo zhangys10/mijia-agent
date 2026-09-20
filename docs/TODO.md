@@ -37,6 +37,24 @@
   fields, and the LLM call log. The `list_devices` read-only tool remains deferred by
   plan.
 
+## Phase 3 — retire legacy command implementation (prepared locally, gated on dev cutover)
+
+- [x] Console branch `feat/phase3-retire-legacy-command` (stacked on phase 2):
+  embedded orchestration deleted (orchestrator/fallback/qwen provider/catalog/
+  scene service/executor/tool validator/binding/conversation/idempotency/auth
+  modules and the orphan `/api/ai/token` route); `/api/ai/command` is a retired
+  stub returning `410 AI_COMMAND_RETIRED`; BYOK is gone from token issuance
+  (payload fields optional, route rejects them; settings UI and offline
+  generator simplified; token generation itself stays as the agent ingress
+  credential). Merge only after M1/M2 dev cutover verifies the remote path.
+- [x] The Siri/console pass-through question stays open by design: pick it at
+  cutover — direct agent ingress or a thin console proxy.
+- [x] Python: pruned the dead `MAX_HISTORY_MESSAGES`/`MAX_CONVERSATION_CONTENT`
+  duplicates (limits live in `command_models.py` Field constraints); preview path
+  stays for deployment policy.
+- [x] Docs refreshed: contracts/architecture note the retirement and no-BYOK tokens;
+  this TODO's M3 cleanup item is marked done below.
+
 ## M1 — Repository and read-only integration — Repository and read-only integration
 
 - [x] Create public `zhangys10/mijia-agent` and publish the extracted project.
@@ -110,8 +128,11 @@ upstream idempotency/observable reconciliation.
 - [ ] Implement bounded receipt retention and conversation TTL; never expire unresolved physical outcomes silently.
 - [ ] Migrate or reset old histories explicitly; do not assume identical IDs imply shared stores across projects.
 - [ ] Keep one active agent backend at a time; add rollback smoke check.
-- [ ] After parity and rollout, remove old TS Gateway/orchestration/runtime code from the console in a follow-up PR.
+- [x] After parity and rollout, remove old TS Gateway/orchestration/runtime code from the console in a follow-up PR.
   Keep catalog/execution/auth/quota modules and their tests.
+  Done on the phase-3 branch: the legacy command implementation is deleted and the
+  console keeps the alias catalog, `runManualScene` execution path, auth/token
+  generation, and quota modules with their tests.
 
 ## M4 — Continue original roadmap here
 

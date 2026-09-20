@@ -133,6 +133,6 @@ The console `/api/ai/tools` accepts the token via the new `X-Ai-User-Token` head
 after the service bearer; the `sessionBinding` envelope path is unchanged. Body uses
 `home` (name or ID) on the token path. The Python tool list for both pipelines matches
 the console contract: `list_scenes`, `get_home_status` (read-only), `activate_scene`
-(disabled). Since the console's phase-2 cleanup, `AI_COMMAND_ENABLED` defaults to
-`false` there: the legacy `/api/ai/command` route stays closed and this repo's
-`POST /ai/command` is the only command ingress.
+(disabled). After the console's phase-3 retirement, its legacy `/api/ai/command` route
+returns `410 AI_COMMAND_RETIRED` and this repo's `POST /ai/command` is the only command
+ingress; whether the console grows a thin Siri pass-through is a cutover decision.

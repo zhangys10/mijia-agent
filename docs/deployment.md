@@ -45,8 +45,9 @@ the [M1 deployment runbook](./m1-deployment-runbook.md).
 4. Verify Agents capability, routing, `context.store`, cancellation, `/api/healthz`,
    and `/api/internal/v1/turn` ingress controls.
 5. Test console→adapter→Python→Gateway and Python→console discovery with fake/low-risk data.
-6. Set console `AI_AGENT_BASE_URL` to the new Makers origin. Keep `AI_COMMAND_ENABLED=false`
-   and old BYOK UI closed. Public Web Chat paths stay unchanged. For the quota-deferred
+6. Set console `AI_AGENT_BASE_URL` to the new Makers origin. Keep the console's legacy
+   `/api/ai/command` route retired (phase 3: it answers `410 AI_COMMAND_RETIRED`) and old
+   BYOK UI closed. Public Web Chat paths stay unchanged. For the quota-deferred
    development cutover, also set console `AI_QUOTA_ENABLED=false`: the console synthesizes
    disabled quota summaries and requires no adapter quota surface. Do not claim cost
    protection in this mode.
