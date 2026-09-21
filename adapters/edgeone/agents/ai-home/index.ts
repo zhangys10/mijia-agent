@@ -49,7 +49,16 @@ export async function onRequest(context: Context) {
       });
       const raw = await response.text();
       if (raw.length > 65536) throw new Error("AI_AGENT_UNAVAILABLE");
-      const result = JSON.parse(raw) as Record<string, unknown>;
+      let result: Record<string, unknown>;
+      try {
+        result = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        // A received but unparseable reply is a rejected turn (e.g. a runtime
+        // error page), not a lost one: nothing executed, so finalize as a failure.
+        result = { code: "AI_AGENT_UNAVAILABLE", requestId };
+        await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result, httpStatus: 502 });
+        return json(result, 502);
+      }
       if (result.requestId !== requestId || (response.ok && (result.conversationId !== conversationId || typeof result.message !== "string"))) throw new Error("AI_AGENT_UNAVAILABLE");
       // Persist the outcome before memory writes; append failure must not rerun the tool.
       await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result, httpStatus: response.status });

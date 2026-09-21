@@ -60,6 +60,29 @@ test("uncertain upstream outcome never automatically reruns", async t => {
   assert.equal(calls, 1);
 });
 
+test("an unparseable upstream reply is a finalized failure, not uncertain", async t => {
+  const { context, state, history } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    // Runtime error pages (e.g. module load failure) arrive as HTML with a 404/502.
+    return new Response("<html>Error loading module</html>", { status: 404 });
+  });
+  const response = await onRequest(context);
+  assert.equal(response.status, 502);
+  assert.equal((await response.json()).code, "AI_AGENT_UNAVAILABLE");
+  const receipt = state.get("idem_" + await digest(JSON.stringify(["usr_test", "home-test", "idem_test_example_1"])));
+  assert.equal(receipt.status, "completed");
+  assert.equal(receipt.httpStatus, 502);
+  assert.equal(receipt.result.code, "AI_AGENT_UNAVAILABLE");
+  assert.equal(history.size, 0);
+  // Same key replays the finalized failure instead of re-running the turn.
+  const replay = await (await onRequest(context)).json();
+  assert.equal(replay.code, "AI_AGENT_UNAVAILABLE");
+  assert.equal(calls, 1);
+});
+
 test("structured homeStatus survives forwarding, receipt storage, and replay without entering history", async t => {
   const { context, history } = fixture();
   const homeStatus = {
