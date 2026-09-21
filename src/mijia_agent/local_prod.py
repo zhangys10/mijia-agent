@@ -6,6 +6,7 @@ production console's execution policy.
 """
 
 import argparse
+import errno
 import getpass
 import ipaddress
 import json
@@ -54,12 +55,6 @@ AGENT_ENV_NAMES = {
     "AI_ENVIRONMENT",
     "AI_LLM_LOG_PATH",
 }
-CONSOLE_ONLY_SECRETS = {
-    "AI_AGENT_INTERNAL_SECRET",
-    "AI_AUTOMATION_TOKEN_SECRET",
-    "AI_PRINCIPAL_SECRET",
-    "XIAOMI_SESSION_SECRET",
-}
 CHILD_BASE_ENV_NAMES = {
     "HOME",
     "LANG",
@@ -70,6 +65,7 @@ CHILD_BASE_ENV_NAMES = {
     "TEMP",
     "TMP",
     "TMPDIR",
+    "VIRTUAL_ENV",
 }
 
 
@@ -129,13 +125,14 @@ def build_environment(path: Path, inherited: Mapping[str, str] | None = None) ->
     child.update({key: value for key, value in loaded.items() if key in AGENT_ENV_NAMES})
     child["AI_ENVIRONMENT"] = "production"
     model = child.get("AI_GATEWAY_MODEL", "").strip()
-    allowed = {
-        item.strip()
-        for item in child.get("AI_GATEWAY_ALLOWED_MODELS", "").split(",")
-        if item.strip()
-    }
-    if model and model not in allowed:
-        raise CliError("AI_GATEWAY_MODEL is not present in AI_GATEWAY_ALLOWED_MODELS")
+    if model and "AI_GATEWAY_ALLOWED_MODELS" in loaded:
+        allowed = {
+            item.strip()
+            for item in child.get("AI_GATEWAY_ALLOWED_MODELS", "").split(",")
+            if item.strip()
+        }
+        if model not in allowed:
+            raise CliError("AI_GATEWAY_MODEL is not present in AI_GATEWAY_ALLOWED_MODELS")
     return child
 
 
@@ -160,8 +157,13 @@ def production_settings(env: Mapping[str, str]) -> Settings:
     """Validate runtime settings and reject explicit local production targets."""
 
     for name in ("AI_GATEWAY_BASE_URL", "MIJIA_CONSOLE_BASE_URL"):
-        url = urlsplit(env.get(name, ""))
-        if url.scheme != "https" or local_hostname(url.hostname):
+        value = env.get(name, "")
+        try:
+            url = urlsplit(value)
+            hostname = url.hostname
+        except ValueError as error:
+            raise CliError(f"{name} must identify the HTTPS production service") from error
+        if url.scheme != "https" or local_hostname(hostname):
             raise CliError(f"{name} must identify the HTTPS production service")
     try:
         return Settings.from_env(env)
@@ -193,7 +195,11 @@ def confirm_production(skip_prompt: bool, input_fn=None) -> None:
     )
     reader = input if input_fn is None else input_fn
     answer = reader(f'Type "{ACKNOWLEDGEMENT}" to continue: ').strip()
-    if not secrets.compare_digest(answer, ACKNOWLEDGEMENT):
+    try:
+        matched = secrets.compare_digest(answer, ACKNOWLEDGEMENT)
+    except TypeError:
+        matched = False
+    if not matched:
         raise CliError("Production acknowledgement did not match; nothing was started")
 
 
@@ -262,7 +268,8 @@ def stop_process(process: subprocess.Popen) -> None:
 
 
 def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Popen:
-    child_env = dict(env)
+    allowed_names = CHILD_BASE_ENV_NAMES | AGENT_ENV_NAMES
+    child_env = {key: value for key, value in env.items() if key in allowed_names}
     package_root = str(Path(__file__).resolve().parents[1])
     existing_pythonpath = child_env.get("PYTHONPATH")
     child_env["PYTHONPATH"] = (
@@ -338,11 +345,13 @@ def send_command(
     if not isinstance(body, dict):
         raise CliError(f"Agent returned an invalid response (HTTP {response.status_code})")
     if response.status_code == 202:
-        raise CliError(f"Request is still processing (Idempotency-Key: {key}); do not retry")
+        raise CliError(
+            f"Request is still processing (Idempotency-Key: {key}); the result is unknown"
+        )
     if response.status_code >= 500:
         raise CliError(
             f"Agent failed after dispatch (HTTP {response.status_code}, Idempotency-Key: {key}); "
-            "check state before retrying"
+            "the result is unknown"
         )
     if response.status_code >= 400 and not isinstance(body.get("code"), str):
         raise CliError(f"Agent returned an invalid error (HTTP {response.status_code})")
@@ -378,7 +387,6 @@ def run_repl(
     token: str,
     one_shot: str | None,
     home: str | None,
-    idempotency_key: str | None = None,
     input_fn=input,
     client_factory=httpx.Client,
 ) -> None:
@@ -395,23 +403,14 @@ def run_repl(
                     break
             if not text or text in {"/quit", "/exit"}:
                 break
-            body, _key = send_command(
-                client,
-                base_url,
-                token,
-                text,
-                conversation_id,
-                history,
-                home,
-                idempotency_key,
-            )
+            body, _key = send_command(client, base_url, token, text, conversation_id, history, home)
             print_response(body)
             if isinstance(body.get("conversationId"), str):
                 conversation_id = body["conversationId"]
             if body.get("conversationReset") is True:
                 history.clear()
                 print("conversation: reset by server")
-            if isinstance(body.get("message"), str) and not body.get("code"):
+            if isinstance(body.get("message"), str) and body["message"] and not body.get("code"):
                 history.extend(
                     [
                         {"role": "user", "content": text},
@@ -421,7 +420,6 @@ def run_repl(
                 history = history[-MAX_HISTORY_MESSAGES:]
             if one_shot is not None:
                 break
-            idempotency_key = None
 
 
 def retain_log(source: Path, destination: Path) -> None:
@@ -429,7 +427,12 @@ def retain_log(source: Path, destination: Path) -> None:
         raise CliError("--keep-log must name a file, not a directory")
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(source, destination)
+        try:
+            os.replace(source, destination)
+        except OSError as error:
+            if getattr(error, "errno", None) != errno.EXDEV:
+                raise
+            shutil.move(str(source), str(destination))
         destination.chmod(0o600)
     except OSError as error:
         raise CliError("Could not retain the sensitive LLM log") from error
@@ -471,7 +474,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--message", help="Send one prompt and exit instead of opening a REPL")
     parser.add_argument(
         "--idempotency-key",
-        help="Replay one --message with a previously printed key after checking its state",
+        help=(
+            "Use an explicit idempotency key with --message; only for the same live agent "
+            "process. Replay across a restarted CLI is not exactly-once"
+        ),
     )
     parser.add_argument("--home", help="Optional production home name or id")
     parser.add_argument("--keep-log", type=Path, help="Retain the sensitive LLM JSONL log here")
@@ -488,10 +494,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not 1 <= args.port <= 65535:
             raise CliError("Port must be between 1 and 65535")
-        if args.idempotency_key and not args.message:
-            raise CliError("--idempotency-key requires --message")
-        if args.idempotency_key and not (16 <= len(args.idempotency_key) <= 128):
-            raise CliError("--idempotency-key must be 16-128 characters")
+        if args.idempotency_key:
+            raise CliError(
+                "--idempotency-key cannot resume a prior CLI process; investigate the printed "
+                "key and ask for a fresh explicit action instead"
+            )
         env = build_environment(args.env_file)
         settings = production_settings(env)
         print(target_summary(settings, args.host, args.port))
@@ -510,7 +517,10 @@ def main(argv: list[str] | None = None) -> int:
             process = start_agent(env, args.host, args.port)
             base_url = f"http://{args.host}:{args.port}"
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
-            run_repl(base_url, token, args.message, args.home, args.idempotency_key)
+            run_repl(base_url, token, args.message, args.home)
+        except (CliError, KeyboardInterrupt) as error:
+            primary_error = error
+            raise
         finally:
             cleanup_error = None
             if process is not None:
@@ -524,8 +534,10 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 shutil.rmtree(log_dir, ignore_errors=True)
             restore_signal_handlers(previous_handlers)
-            if cleanup_error is not None:
+            if cleanup_error is not None and primary_error is None:
                 raise cleanup_error
+            if cleanup_error is not None:
+                print(f"error: {cleanup_error}", file=sys.stderr)
         return 0
     except (CliError, KeyboardInterrupt) as error:
         message = str(error) if str(error) else "Interrupted"

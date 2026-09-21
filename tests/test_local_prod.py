@@ -155,6 +155,22 @@ def test_confirmation_requires_exact_phrase():
     local_prod.confirm_production(True, input_fn=lambda _prompt: pytest.fail("prompted"))
 
 
+def test_confirmation_rejects_non_ascii_without_traceback():
+    with pytest.raises(local_prod.CliError, match="nothing was started"):
+        local_prod.confirm_production(False, input_fn=lambda _prompt: "使用生产服务")
+
+
+def test_build_environment_preserves_default_model_allowlist(tmp_path):
+    path = tmp_path / ".env"
+    values = {key: value for key, value in PROD_ENV.items() if key != "AI_GATEWAY_ALLOWED_MODELS"}
+    write_env(path, values)
+
+    child = local_prod.build_environment(path, {})
+
+    settings = local_prod.Settings.from_env(child)
+    assert settings.allowed_models == (PROD_ENV["AI_GATEWAY_MODEL"],)
+
+
 def test_token_file_must_be_owner_only_and_token_stays_out_of_child_env(tmp_path):
     token_path = tmp_path / "token"
     token_path.write_text("v1.secret-token\n", encoding="utf-8")
@@ -257,6 +273,13 @@ def test_send_command_can_reuse_explicit_idempotency_key():
     assert requests[0].headers["idempotency-key"] == key
 
 
+def test_malformed_bracketed_url_is_safe_cli_error():
+    env = PROD_ENV | {"MIJIA_CONSOLE_BASE_URL": "https://[::1"}
+
+    with pytest.raises(local_prod.CliError, match="MIJIA_CONSOLE_BASE_URL"):
+        local_prod.production_settings(env)
+
+
 def test_send_command_reports_unknown_outcome_without_retry():
     calls = 0
 
@@ -273,13 +296,48 @@ def test_send_command_reports_unknown_outcome_without_retry():
     assert calls == 1
 
 
+def test_run_repl_skips_empty_sanitized_assistant_message():
+    prompts = iter(("first", "second"))
+    calls = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def send(_client, _base_url, _token, text, conversation_id, history, home):
+        calls.append((text, list(history)))
+        return {
+            "requestId": "req_test",
+            "conversationId": conversation_id or "conv_test",
+            "status": "not_understood",
+            "intent": "none",
+            "message": "",
+        }, "key"
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(local_prod, "send_command", send)
+        local_prod.run_repl(
+            "http://local",
+            "secret-token",
+            None,
+            None,
+            input_fn=lambda _prompt: next(prompts, "/quit"),
+            client_factory=lambda **_kwargs: Client(),
+        )
+
+    assert calls == [("first", []), ("second", [])]
+
+
 def test_send_command_treats_server_error_as_post_dispatch_failure():
     def handler(_request):
         return httpx.Response(502, json={"code": "MI_CLOUD_ERROR"})
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
-        pytest.raises(local_prod.CliError, match="failed after dispatch.*check state"),
+        pytest.raises(local_prod.CliError, match="failed after dispatch.*unknown"),
     ):
         local_prod.send_command(client, "http://local", "secret-token", "one", None, [], None)
 
@@ -415,9 +473,10 @@ def test_start_agent_argv_and_env_never_include_automation_token(monkeypatch):
         return FakeProcess()
 
     monkeypatch.setattr(local_prod.subprocess, "Popen", fake_popen)
-    local_prod.start_agent(PROD_ENV, "127.0.0.1", 8123)
+    local_prod.start_agent(PROD_ENV | {"AUTOMATION_TOKEN": "v1.sentinel-token"}, "127.0.0.1", 8123)
 
     serialized = repr(captured)
+    assert "v1.sentinel-token" not in serialized
     assert "automation-token" not in serialized
     assert "--port" in captured["command"]
     assert "-P" in captured["command"]

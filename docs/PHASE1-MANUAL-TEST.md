@@ -61,9 +61,10 @@ The CLI will:
 Use `/exit`, `/quit`, Ctrl-D, or Ctrl-C to stop. Every prompt gets a new random
 `Idempotency-Key`, which is printed before dispatch. The CLI never automatically retries a
 timeout, disconnect, `202 processing`, or other unknown result. Preserve the printed key
-and inspect the executor state before deciding whether a new action is safe. If an operator
-has established that replay is appropriate, rerun the exact one-shot payload with
-`--idempotency-key <printed-key>`; never substitute a new key for an uncertain action.
+and inspect the executor state before deciding whether a new action is safe. The current
+store is process-local, so **a new CLI process cannot claim exactly-once replay**; do not
+repeat a prompt after an uncertain outcome until the executor confirms it did not run.
+After confirmation, any new prompt is a deliberate fresh action with a fresh key.
 
 For one prompt and exit:
 
