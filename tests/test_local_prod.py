@@ -13,7 +13,7 @@ PROD_ENV = {
     "AI_GATEWAY_BASE_URL": "https://gateway.example/v1",
     "MIJIA_CONSOLE_BASE_URL": "https://console.example",
     "AI_GATEWAY_MODEL": "@makers/test-model",
-    "AI_GATEWAY_ALLOWED_MODELS": "stale-local-model",
+    "AI_GATEWAY_ALLOWED_MODELS": "@makers/test-model",
 }
 
 
@@ -57,7 +57,7 @@ def test_parse_env_file_rejects_shell_syntax(tmp_path, content):
         local_prod.parse_env_file(path)
 
 
-def test_build_environment_isolated_overlay_and_model_normalization(tmp_path):
+def test_build_environment_isolated_and_policy_preserving(tmp_path):
     path = tmp_path / ".env"
     write_env(path, PROD_ENV | {"XIAOMI_SESSION_SECRET": "must-not-reach-python"})
     inherited = {
@@ -65,20 +65,30 @@ def test_build_environment_isolated_overlay_and_model_normalization(tmp_path):
         "AI_ENVIRONMENT": "development",
         "UNCHANGED": "yes",
         "AI_AUTOMATION_TOKEN_SECRET": "must-not-reach-python",
+        "HTTPS_PROXY": "http://proxy.example:8080",
     }
 
     child = local_prod.build_environment(path, inherited)
 
     assert child["PATH"] == "/bin"
-    assert child["UNCHANGED"] == "yes"
+    assert "UNCHANGED" not in child
     assert "XIAOMI_SESSION_SECRET" not in child
     assert "AI_AUTOMATION_TOKEN_SECRET" not in child
+    assert "HTTPS_PROXY" not in child
     assert child["AI_ENVIRONMENT"] == "production"
-    assert child["AI_GATEWAY_ALLOWED_MODELS"] == PROD_ENV["AI_GATEWAY_MODEL"]
+    assert child["AI_GATEWAY_ALLOWED_MODELS"] == PROD_ENV["AI_GATEWAY_ALLOWED_MODELS"]
     assert "AI_GATEWAY_API_KEY" not in inherited
     original = path.read_text(encoding="utf-8")
-    assert "AI_GATEWAY_ALLOWED_MODELS=stale-local-model" in original
+    assert "AI_GATEWAY_ALLOWED_MODELS=@makers/test-model" in original
     assert "XIAOMI_SESSION_SECRET=must-not-reach-python" in original
+
+
+def test_build_environment_rejects_stale_model_allowlist(tmp_path):
+    path = tmp_path / ".env"
+    write_env(path, PROD_ENV | {"AI_GATEWAY_ALLOWED_MODELS": "stale-local-model"})
+
+    with pytest.raises(local_prod.CliError, match="AI_GATEWAY_MODEL.*ALLOWED_MODELS"):
+        local_prod.build_environment(path, {})
 
 
 def test_production_settings_rejects_loopback_target_without_exposing_secret():
@@ -93,6 +103,18 @@ def test_production_settings_rejects_loopback_target_without_exposing_secret():
 
     assert "MIJIA_CONSOLE_BASE_URL" in str(caught.value)
     assert PROD_ENV["AI_GATEWAY_API_KEY"] not in str(caught.value)
+
+
+@pytest.mark.parametrize("host", ["127.1", "0.0.0.0", "localhost.", "[::ffff:127.0.0.1]"])
+def test_production_settings_rejects_other_explicit_local_hosts(host):
+    env = PROD_ENV | {
+        "AI_ENVIRONMENT": "production",
+        "AI_GATEWAY_ALLOWED_MODELS": PROD_ENV["AI_GATEWAY_MODEL"],
+        "MIJIA_CONSOLE_BASE_URL": f"https://{host}",
+    }
+
+    with pytest.raises(local_prod.CliError, match="MIJIA_CONSOLE_BASE_URL"):
+        local_prod.production_settings(env)
 
 
 def test_invalid_settings_error_does_not_echo_values():
@@ -327,6 +349,31 @@ def test_run_cleans_private_log_when_child_start_fails(tmp_path, monkeypatch):
 
     assert result == 2
     assert not log_dir.exists()
+
+
+def test_retain_log_rejects_directory_and_keeps_source(tmp_path):
+    source = tmp_path / "source.jsonl"
+    source.write_text("sensitive", encoding="utf-8")
+    destination = tmp_path / "logs"
+    destination.mkdir()
+
+    with pytest.raises(local_prod.CliError, match="must name a file"):
+        local_prod.retain_log(source, destination)
+
+    assert source.read_text(encoding="utf-8") == "sensitive"
+    assert stat.S_IMODE(destination.stat().st_mode) & stat.S_IXUSR
+
+
+def test_retain_log_moves_to_owner_only_file(tmp_path):
+    source = tmp_path / "source.jsonl"
+    source.write_text("sensitive", encoding="utf-8")
+    destination = tmp_path / "nested" / "kept.jsonl"
+
+    local_prod.retain_log(source, destination)
+
+    assert not source.exists()
+    assert destination.read_text(encoding="utf-8") == "sensitive"
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
 
 
 def test_start_agent_argv_and_env_never_include_automation_token(monkeypatch):

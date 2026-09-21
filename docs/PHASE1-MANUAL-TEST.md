@@ -19,8 +19,8 @@ work is complete, production scene activation is expected to return
 
 The pulled env must include the production Gateway fields, `AI_PYTHON_INTERNAL_SECRET`,
 `AI_TOOLS_INTERNAL_SECRET`, and an HTTPS production `MIJIA_CONSOLE_BASE_URL`. It may carry
-an old `AI_GATEWAY_ALLOWED_MODELS`; the CLI safely normalizes the child process allowlist
-to the configured `AI_GATEWAY_MODEL` without modifying the source file.
+an `AI_GATEWAY_ALLOWED_MODELS` value that includes the configured model. The CLI validates
+that allowlist without weakening or modifying the deployment policy.
 
 ## 1. Check the target without making network calls
 
@@ -85,7 +85,9 @@ mijia-agent-local-prod run --token-file /path/to/automation-token
 
 The CLI refuses group/world-readable token files. Do not put the token on the command line,
 in a repo file, or in shell history. The token is held only by the parent CLI and sent to
-the loopback route; it is not added to the child environment or Uvicorn argv.
+the loopback route; it is not added to the child environment or Uvicorn argv. Proxy
+environment variables are disabled for both loopback and production requests so credentials
+cannot be captured by an inherited HTTP(S) proxy.
 
 Automation can skip the typed phrase with the intentionally explicit
 `--i-understand-this-uses-production` flag. This acknowledges production use; it does not

@@ -7,6 +7,7 @@ production console's execution policy.
 
 import argparse
 import getpass
+import ipaddress
 import json
 import os
 import secrets
@@ -58,6 +59,17 @@ CONSOLE_ONLY_SECRETS = {
     "AI_AUTOMATION_TOKEN_SECRET",
     "AI_PRINCIPAL_SECRET",
     "XIAOMI_SESSION_SECRET",
+}
+CHILD_BASE_ENV_NAMES = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
 }
 
 
@@ -112,22 +124,44 @@ def build_environment(path: Path, inherited: Mapping[str, str] | None = None) ->
     """Build the isolated child environment without mutating the parent process."""
 
     base = os.environ if inherited is None else inherited
-    child = {key: value for key, value in base.items() if key not in CONSOLE_ONLY_SECRETS}
+    child = {key: value for key, value in base.items() if key in CHILD_BASE_ENV_NAMES}
     loaded = parse_env_file(path)
     child.update({key: value for key, value in loaded.items() if key in AGENT_ENV_NAMES})
     child["AI_ENVIRONMENT"] = "production"
     model = child.get("AI_GATEWAY_MODEL", "").strip()
-    if model:
-        child["AI_GATEWAY_ALLOWED_MODELS"] = model
+    allowed = {
+        item.strip()
+        for item in child.get("AI_GATEWAY_ALLOWED_MODELS", "").split(",")
+        if item.strip()
+    }
+    if model and model not in allowed:
+        raise CliError("AI_GATEWAY_MODEL is not present in AI_GATEWAY_ALLOWED_MODELS")
     return child
 
 
+def local_hostname(hostname: str | None) -> bool:
+    if not hostname:
+        return True
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        try:
+            packed = socket.inet_aton(normalized)
+            address = ipaddress.ip_address(packed)
+        except OSError:
+            return False
+    return address.is_loopback or address.is_unspecified or address.is_link_local
+
+
 def production_settings(env: Mapping[str, str]) -> Settings:
-    """Validate runtime settings and require real HTTPS production dependencies."""
+    """Validate runtime settings and reject explicit local production targets."""
 
     for name in ("AI_GATEWAY_BASE_URL", "MIJIA_CONSOLE_BASE_URL"):
         url = urlsplit(env.get(name, ""))
-        if url.scheme != "https" or url.hostname in {"localhost", "127.0.0.1", "::1"}:
+        if url.scheme != "https" or local_hostname(url.hostname):
             raise CliError(f"{name} must identify the HTTPS production service")
     try:
         return Settings.from_env(env)
@@ -204,7 +238,7 @@ def wait_until_ready(process: subprocess.Popen, base_url: str, timeout: float) -
         if process.poll() is not None:
             raise CliError("Local agent exited before becoming ready")
         try:
-            response = httpx.get(base_url + "/healthz", timeout=0.5)
+            response = httpx.get(base_url + "/healthz", timeout=0.5, trust_env=False)
             if response.status_code == 200 and response.json() == {"status": "ok"}:
                 return
         except (httpx.HTTPError, ValueError):
@@ -221,7 +255,10 @@ def stop_process(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=2)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired as error:
+            raise CliError("Local agent did not stop; inspect the child process") from error
 
 
 def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Popen:
@@ -334,10 +371,11 @@ def run_repl(
     one_shot: str | None,
     home: str | None,
     input_fn=input,
+    client_factory=httpx.Client,
 ) -> None:
     conversation_id: str | None = None
     history: list[dict[str, str]] = []
-    with httpx.Client(follow_redirects=False) as client:
+    with client_factory(follow_redirects=False, trust_env=False) as client:
         while True:
             if one_shot is not None:
                 text = one_shot.strip()
@@ -365,6 +403,18 @@ def run_repl(
                 history = history[-MAX_HISTORY_MESSAGES:]
             if one_shot is not None:
                 break
+
+
+def retain_log(source: Path, destination: Path) -> None:
+    if destination.exists() and destination.is_dir():
+        raise CliError("--keep-log must name a file, not a directory")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, destination)
+        destination.chmod(0o600)
+    except OSError as error:
+        raise CliError("Could not retain the sensitive LLM log") from error
+    print(f"Sensitive LLM log retained at {destination} (mode 0600).")
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -412,14 +462,19 @@ def main(argv: list[str] | None = None) -> int:
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
             run_repl(base_url, token, args.message, args.home)
         finally:
+            cleanup_error = None
             if process is not None:
-                stop_process(process)
-            if args.keep_log and log_path.exists():
-                args.keep_log.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(log_path), args.keep_log)
-                args.keep_log.chmod(0o600)
-                print(f"Sensitive LLM log retained at {args.keep_log} (mode 0600).")
-            shutil.rmtree(log_dir, ignore_errors=True)
+                try:
+                    stop_process(process)
+                except CliError as error:
+                    cleanup_error = error
+            try:
+                if args.keep_log and log_path.exists():
+                    retain_log(log_path, args.keep_log)
+            finally:
+                shutil.rmtree(log_dir, ignore_errors=True)
+            if cleanup_error is not None:
+                raise cleanup_error
         return 0
     except (CliError, KeyboardInterrupt) as error:
         message = str(error) if str(error) else "Interrupted"
