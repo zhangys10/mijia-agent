@@ -391,3 +391,20 @@ def test_start_agent_argv_and_env_never_include_automation_token(monkeypatch):
     assert "automation-token" not in serialized
     assert "--port" in captured["command"]
     assert captured["stdin"] is local_prod.subprocess.DEVNULL
+    assert captured["env"]["PYTHONPATH"].split(local_prod.os.pathsep)[0] == str(
+        Path(local_prod.__file__).resolve().parents[1]
+    )
+
+
+def test_termination_handlers_raise_keyboard_interrupt(monkeypatch):
+    handlers = {}
+    monkeypatch.setattr(local_prod.signal, "getsignal", lambda signum: f"old-{signum}")
+    monkeypatch.setattr(
+        local_prod.signal, "signal", lambda signum, handler: handlers.setdefault(signum, handler)
+    )
+
+    previous = local_prod.install_termination_handlers()
+
+    assert previous[local_prod.signal.SIGTERM] == f"old-{local_prod.signal.SIGTERM}"
+    with pytest.raises(KeyboardInterrupt):
+        handlers[local_prod.signal.SIGTERM](local_prod.signal.SIGTERM, None)

@@ -262,6 +262,12 @@ def stop_process(process: subprocess.Popen) -> None:
 
 
 def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Popen:
+    child_env = dict(env)
+    package_root = str(Path(__file__).resolve().parents[1])
+    existing_pythonpath = child_env.get("PYTHONPATH")
+    child_env["PYTHONPATH"] = (
+        package_root + os.pathsep + existing_pythonpath if existing_pythonpath else package_root
+    )
     command = [
         sys.executable,
         "-m",
@@ -277,7 +283,7 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
         "warning",
     ]
     try:
-        return subprocess.Popen(command, env=dict(env), stdin=subprocess.DEVNULL)
+        return subprocess.Popen(command, env=child_env, stdin=subprocess.DEVNULL)
     except OSError as error:
         raise CliError("Could not start the local agent") from error
 
@@ -417,6 +423,23 @@ def retain_log(source: Path, destination: Path) -> None:
     print(f"Sensitive LLM log retained at {destination} (mode 0600).")
 
 
+def install_termination_handlers() -> dict[signal.Signals, object]:
+    previous = {}
+
+    def interrupt(_signum, _frame):
+        raise KeyboardInterrupt
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        previous[signum] = signal.getsignal(signum)
+        signal.signal(signum, interrupt)
+    return previous
+
+
+def restore_signal_handlers(previous: Mapping[signal.Signals, object]) -> None:
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mijia-agent-local-prod",
@@ -456,12 +479,14 @@ def main(argv: list[str] | None = None) -> int:
         log_dir, log_path = private_log_path()
         env["AI_LLM_LOG_PATH"] = str(log_path)
         process = None
+        previous_handlers = install_termination_handlers()
         try:
             process = start_agent(env, args.host, args.port)
             base_url = f"http://{args.host}:{args.port}"
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
             run_repl(base_url, token, args.message, args.home)
         finally:
+            restore_signal_handlers(previous_handlers)
             cleanup_error = None
             if process is not None:
                 try:
