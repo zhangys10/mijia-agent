@@ -146,6 +146,12 @@ upstream idempotency/observable reconciliation.
       after the model selects it, and returns it as `Result.homeStatus` (values never
       enter model messages or conversation history). Companion console collector,
       dashboard, and tool facade are tracked in the web console repo.
+- [x] Add read-only `get_device_status` agent tool: Python advertises the empty-argument
+      tool, fetches the sanitized per-room device on/off snapshot from the console tools
+      API only after the model selects it, and returns it as `Result.deviceStatus`
+      (states never enter model messages or conversation history). The console collector
+      shares the home dashboard's device sync pipeline and lighting model, so the agent
+      and the dashboard answer from one read path.
 - [ ] Web assistant UI stays in console; new repo owns behavior and API evolution.
 - [ ] Siri/Automation Token migration: no model key; same agent, quota and executor; command remains disabled until ready.
 - [ ] Verify Makers scheduler APIs rather than infer them from “scheduled tasks” use cases.

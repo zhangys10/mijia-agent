@@ -159,6 +159,31 @@ test("structured homeStatus survives forwarding, receipt storage, and replay wit
   assert.equal(replay.usage.totalTokens, 0);
 });
 
+test("structured deviceStatus survives forwarding, receipt storage, and replay without entering history", async t => {
+  const { context, history } = fixture();
+  const deviceStatus = {
+    capturedAt: "2026-09-21T08:00:00Z",
+    completeness: "complete",
+    poweredOn: 1,
+    rooms: [{ room: "客厅", items: [{ name: "客厅吸顶灯", kind: "light", state: "on", online: true }] }],
+    warnings: [],
+  };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭设备状态。", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
+  });
+  const first = await (await onRequest(context)).json();
+  assert.deepEqual(first.deviceStatus, deviceStatus);
+  // Only the generic message enters conversation history, never the structured states.
+  assert.equal([...history.values()][0][1].content, "已读取当前家庭设备状态。");
+  context.request.body.requestId = "req_example_000002";
+  const replay = await (await onRequest(context)).json();
+  assert.deepEqual(replay.deviceStatus, deviceStatus);
+  assert.equal(replay.requestId, "req_example_000002");
+  assert.equal(replay.usage.totalTokens, 0);
+});
+
 test("finalized upstream failure replay retains known model usage", async t => {
   const { context, history } = fixture();
   let calls = 0;

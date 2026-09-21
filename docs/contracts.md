@@ -61,6 +61,7 @@ the binding, re-derives the principal from its session, and reloads current home
 | `authorize` | `{}` | `{ "ok": true }` after authentication/home checks; not model-visible |
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
+| `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
 | `activate_scene` | `{ "sceneId": "scene_<opaque-alias>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until executor gate is complete |
 
 `get_home_status` aggregates readings from any supported devices and returns a strict
@@ -94,6 +95,34 @@ Python validates this shape strictly (`extra="forbid"`, bounded lists and string
 forwards it as `Result.homeStatus`. Readings are fetched only after the model selects
 the tool; they never enter model messages, replies, or conversation history. The reply
 text is a generic statement; the browser assistant renders the structured readings.
+
+`get_device_status` answers "which lights/devices are on, by room" with the same
+sanitization contract (never DIDs, model strings, raw property addresses, or Xiaomi
+records). The console builds it from the same device sync pipeline and lighting model
+as its home dashboard:
+
+```json
+{
+  "capturedAt": "2026-09-21T08:00:00Z",
+  "completeness": "complete | partial | empty",
+  "poweredOn": 1,
+  "rooms": [
+    {
+      "room": "客厅",
+      "items": [
+        { "name": "客厅吸顶灯", "kind": "light", "state": "on | off | unknown", "online": true }
+      ]
+    }
+  ],
+  "warnings": ["部分设备状态暂时不可用。"]
+}
+```
+
+Devices without a readable power property (locks, sensors) report `state: "unknown"`
+— never a guessed value. Python validates the shape strictly and forwards it as
+`Result.deviceStatus`; states are fetched only after the model selects the tool and
+never enter model messages, replies, or conversation history. The reply text is a
+generic statement; the browser assistant renders the per-room device card.
 
 The future executor must refresh the scene, validate alias/home/approval revision/risk,
 claim a durable execution receipt, and return only `status` and `message`. It must not
@@ -164,7 +193,7 @@ gateway keys, or principal IDs ever appear.
 The console `/api/ai/tools` accepts the token via the new `X-Ai-User-Token` header
 after the service bearer; the `sessionBinding` envelope path is unchanged. Body uses
 `home` (name or ID) on the token path. The Python tool list for both pipelines matches
-the console contract: `list_scenes`, `get_home_status` (read-only), `activate_scene`
-(disabled). After the console's phase-3 retirement, its legacy `/api/ai/command` route
+the console contract: `list_scenes`, `get_home_status` and `get_device_status`
+(read-only), `activate_scene` (disabled). After the console's phase-3 retirement, its legacy `/api/ai/command` route
 returns `410 AI_COMMAND_RETIRED` and this repo's `POST /ai/command` is the only command
 ingress; whether the console grows a thin Siri pass-through is a cutover decision.
