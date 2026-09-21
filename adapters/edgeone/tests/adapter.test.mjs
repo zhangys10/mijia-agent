@@ -60,6 +60,73 @@ test("uncertain upstream outcome never automatically reruns", async t => {
   assert.equal(calls, 1);
 });
 
+test("memory append failure after a successful turn neither fails the reply nor poisons the receipt", async t => {
+  const { context, history } = fixture();
+  let appendCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "conv_test_123", message: "回复", intent: "none" });
+  });
+  const original = context.store.appendMessage;
+  context.store.appendMessage = async params => { appendCalls++; await original(params); };
+  // First append throws (simulating a store blip), the retry path recovers.
+  context.store.appendMessage = async params => {
+    appendCalls++;
+    if (appendCalls === 1) throw new Error("memory store unavailable");
+    return original(params);
+  };
+  const ok = await onRequest(context);
+  assert.equal(ok.status, 200);
+  // The receipt is completed with the real result, so a same-key replay returns 200, not 409.
+  context.request.body.requestId = "req_example_000002";
+  const replay = await (await onRequest(context)).json();
+  assert.equal(replay.requestId, "req_example_000002");
+  assert.equal((replay.usage?.totalTokens) ?? 0, 0);
+});
+
+test("unparseable upstream body is a finalized 502 that replays as 502, not 409", async t => {
+  const { context } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    return new Response("<html>Bad Gateway</html>", { status: 200 });
+  });
+  assert.equal((await onRequest(context)).status, 502);
+  context.request.body.requestId = "req_example_000002";
+  assert.equal((await onRequest(context)).status, 502);
+  assert.equal(calls, 1);
+});
+
+test("confirmed 200 with a broken response contract stays uncertain and never reruns", async t => {
+  const { context } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    // 200 whose conversationId does not match ours: the turn ran upstream, its outcome is unreadable.
+    return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "cv_someone_else", message: "回复" });
+  });
+  assert.equal((await onRequest(context)).status, 409);
+  context.request.body.requestId = "req_example_000002";
+  assert.equal((await onRequest(context)).status, 409);
+  assert.equal(calls, 1);
+});
+
+test("failed upstream status with a broken body finalizes as 502 and replays", async t => {
+  const { context } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    return new Response("upstream exploded", { status: 500 });
+  });
+  assert.equal((await onRequest(context)).status, 502);
+  context.request.body.requestId = "req_example_000002";
+  assert.equal((await onRequest(context)).status, 502);
+  assert.equal(calls, 1);
+});
+
 test("structured homeStatus survives forwarding, receipt storage, and replay without entering history", async t => {
   const { context, history } = fixture();
   const homeStatus = {
