@@ -48,6 +48,31 @@ server secret. It is not a browser or Siri endpoint. It must only be called by
 the Makers adapter after the web console has authenticated the user and reserved quota.
 `GET /healthz` is a liveness check, not proof that Gateway or console access works.
 
+### Local agent with production services
+
+> **Live production integration — not a unit test.** These commands use real production
+> account/home data and incur real Gateway cost. They preserve the production execution
+> policy; they do not enable or bypass physical scene execution.
+
+After pulling the production environment into the ignored `adapters/edgeone/.env`, verify
+that it targets the HTTPS production console and inspect the redacted target:
+
+```bash
+mijia-agent-local-prod check
+```
+
+Then obtain a production automation token from the console settings UI and run either an
+interactive session or one bounded prompt:
+
+```bash
+mijia-agent-local-prod run
+mijia-agent-local-prod run --message '我还没回家'
+```
+
+The CLI reads the token through a hidden prompt, starts the real ASGI app on loopback,
+and shuts it down on exit. See [the live test guide](docs/PHASE1-MANUAL-TEST.md) for token
+files, retained logs, expected execution-gate behavior, and operational warnings.
+
 ## EdgeOne adapter
 
 `adapters/edgeone/` contains the thin TypeScript shell needed by the existing
