@@ -10,7 +10,7 @@ so they can never reach these records. Logging failures must never break a turn.
 import json
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 
 class LlmCallLogger:
@@ -20,7 +20,7 @@ class LlmCallLogger:
         self._lock = threading.Lock()
 
     def log(self, record: dict) -> None:
-        record.setdefault("ts", datetime.now(UTC).isoformat())
+        record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         line = json.dumps(record, ensure_ascii=False, default=str)
         try:
             with self._lock:

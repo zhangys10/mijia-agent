@@ -68,7 +68,6 @@ test("memory append failure after a successful turn neither fails the reply nor 
     return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "conv_test_123", message: "回复", intent: "none" });
   });
   const original = context.store.appendMessage;
-  context.store.appendMessage = async params => { appendCalls++; await original(params); };
   // First append throws (simulating a store blip), the retry path recovers.
   context.store.appendMessage = async params => {
     appendCalls++;
@@ -85,16 +84,25 @@ test("memory append failure after a successful turn neither fails the reply nor 
 });
 
 test("unparseable upstream body is a finalized 502 that replays as 502, not 409", async t => {
-  const { context } = fixture();
+  const { context, state, history } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async url => {
     if (url.includes("console.example")) return Response.json({ ok: true });
     calls++;
-    return new Response("<html>Bad Gateway</html>", { status: 200 });
+    // Runtime error pages (e.g. module load failure) arrive as HTML with a 404/502.
+    return new Response("<html>Error loading module</html>", { status: 404 });
   });
-  assert.equal((await onRequest(context)).status, 502);
-  context.request.body.requestId = "req_example_000002";
-  assert.equal((await onRequest(context)).status, 502);
+  const response = await onRequest(context);
+  assert.equal(response.status, 502);
+  assert.equal((await response.json()).code, "AI_AGENT_UNAVAILABLE");
+  const receipt = state.get("idem_" + await digest(JSON.stringify(["usr_test", "home-test", "idem_test_example_1"])));
+  assert.equal(receipt.status, "completed");
+  assert.equal(receipt.httpStatus, 502);
+  assert.equal(receipt.result.code, "AI_AGENT_UNAVAILABLE");
+  assert.equal(history.size, 0);
+  // Same key replays the finalized failure instead of re-running the turn.
+  const replay = await (await onRequest(context)).json();
+  assert.equal(replay.code, "AI_AGENT_UNAVAILABLE");
   assert.equal(calls, 1);
 });
 
