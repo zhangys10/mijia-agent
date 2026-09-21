@@ -34,14 +34,16 @@ SYSTEM_PROMPT = """你是家庭控制意图路由器，你的核心职责是识�
 9. 禁止输出任何思考过程或思维链，只能调用工具或输出简短答复。"""
 
 # Chat pipeline addendum: the read-only tools the chat contract offers in
-# addition to activate_scene (list_scenes, get_home_status).
+# addition to activate_scene (list_scenes, get_home_status, get_device_status).
 CHAT_TOOLS_ADDENDUM = """
 
 【只读工具补充（仅网页对话）】
 10. 当用户想了解当前家庭有哪些可用场景时，调用 list_scenes 工具。
 11. 当用户询问温度、湿度、空气质量、甲醛、二氧化碳等环境数据时，调用 get_home_status 工具；
 它只读且无参数，读数由系统返回，不得自行编造任何数值或单位。
-12. list_scenes 与 get_home_status 是只读查询，不会执行任何设备操作；除查询外的场景意图仍必须调用 activate_scene。"""
+12. 当用户询问哪些设备或灯开着、某个房间的设备开关状态时，调用 get_device_status 工具；
+它只读且无参数，状态由系统返回，不得自行编造任何设备名称或开关状态。
+13. list_scenes、get_home_status 与 get_device_status 是只读查询，不会执行任何设备操作；除查询外的场景意图仍必须调用 activate_scene。"""
 
 FALLBACK_PHRASES = (
     "我回家了",
@@ -201,6 +203,14 @@ def chat_tools(scenes: list[Scene], allow_activate: bool) -> list[dict]:
             "function": {
                 "name": "get_home_status",
                 "description": "查询当前家庭的环境状态（温度、湿度、空气质量等只读数据）。",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_device_status",
+                "description": "查询当前家庭各房间的设备开关状态（例如哪些灯开着、空调是否运行，只读数据）。",
                 "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
             },
         },

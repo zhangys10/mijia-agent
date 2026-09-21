@@ -84,14 +84,19 @@ allowlist, fixed non-thinking mode, bounded output and timeout. No production mo
 is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 2026-09-17; this remains a deployment observation, not a source default.
 
-Only `list_scenes`, `get_home_status`, and `activate_scene` are recognized. Additional
-arguments, multiple tool calls, unknown aliases and invented tools fail closed. Activation also
+Only `list_scenes`, `get_home_status`, `get_device_status`, and `activate_scene` are
+recognized. Additional arguments, multiple tool calls, unknown aliases and invented tools
+fail closed. Activation also
 requires `scene:activate` and a conservative explicit-current-command check in Python.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
 environment snapshot from the console tools API only after the model selects the tool,
 returns it as the structured `Result.homeStatus` field, and keeps measurements out of
 reply text and conversation history. The console dashboard uses the same collector, so
 browser UI and agent answers share one read path and one sanitization contract.
+`get_device_status` follows the same read-only pattern for the per-room device on/off
+snapshot ("which lights are on"): the console builds it from the same device sync
+pipeline and lighting model as its home dashboard, Python returns it as
+`Result.deviceStatus`, and states stay out of reply text and conversation history.
 Negation, conditions, quoted commands and ambiguous language produce clarification.
 The matching grammar is intentionally narrow; broader language requires tests or a
 separate confirmation flow. A model reply never overrides the executor's actual status.

@@ -2,7 +2,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentError, Execution, HomeStatus, Scene, Turn
+from .models import AgentError, DeviceStatus, Execution, HomeStatus, Scene, Turn
 
 
 class ConsoleTools:
@@ -78,6 +78,13 @@ class ConsoleTools:
         body = await self.call(turn, "get_home_status", {})
         try:
             return HomeStatus.model_validate(body)
+        except ValidationError:
+            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+
+    async def get_device_status(self, turn: Turn) -> DeviceStatus:
+        body = await self.call(turn, "get_device_status", {})
+        try:
+            return DeviceStatus.model_validate(body)
         except ValidationError:
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
 
