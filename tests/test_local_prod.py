@@ -231,6 +231,32 @@ def test_send_command_uses_unique_keys_and_does_not_retry(monkeypatch, capsys):
     assert "secret-token" not in capsys.readouterr().out
 
 
+def test_send_command_can_reuse_explicit_idempotency_key():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "requestId": "req_test",
+                "conversationId": "conv_test",
+                "status": "not_understood",
+                "intent": "none",
+                "message": "ok",
+            },
+        )
+
+    key = "previously-printed-key-0001"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        _body, returned_key = local_prod.send_command(
+            client, "http://local", "secret-token", "one", None, [], None, key
+        )
+
+    assert returned_key == key
+    assert requests[0].headers["idempotency-key"] == key
+
+
 def test_send_command_reports_unknown_outcome_without_retry():
     calls = 0
 
@@ -307,6 +333,10 @@ def test_check_mode_makes_no_network_or_process_calls(tmp_path, monkeypatch, cap
     assert result == 0
     assert "No network calls were made" in output.out
     assert PROD_ENV["AI_GATEWAY_API_KEY"] not in output.out + output.err
+
+
+def test_main_requires_message_for_explicit_idempotency_key():
+    assert local_prod.main(["run", "--idempotency-key", "valid-key-0000001"]) == 2
 
 
 def test_run_requires_acknowledgement_before_token_or_process(tmp_path, monkeypatch):
@@ -390,6 +420,7 @@ def test_start_agent_argv_and_env_never_include_automation_token(monkeypatch):
     serialized = repr(captured)
     assert "automation-token" not in serialized
     assert "--port" in captured["command"]
+    assert "-P" in captured["command"]
     assert captured["stdin"] is local_prod.subprocess.DEVNULL
     assert captured["env"]["PYTHONPATH"].split(local_prod.os.pathsep)[0] == str(
         Path(local_prod.__file__).resolve().parents[1]
@@ -408,3 +439,18 @@ def test_termination_handlers_raise_keyboard_interrupt(monkeypatch):
     assert previous[local_prod.signal.SIGTERM] == f"old-{local_prod.signal.SIGTERM}"
     with pytest.raises(KeyboardInterrupt):
         handlers[local_prod.signal.SIGTERM](local_prod.signal.SIGTERM, None)
+
+
+def test_restore_signal_handlers_skips_none_and_ignores_restore_errors(monkeypatch):
+    calls = []
+
+    def fail_restore(signum, handler):
+        calls.append((signum, handler))
+        raise TypeError("unsupported handler")
+
+    monkeypatch.setattr(local_prod.signal, "signal", fail_restore)
+    local_prod.restore_signal_handlers(
+        {local_prod.signal.SIGTERM: None, local_prod.signal.SIGHUP: "old"}
+    )
+
+    assert calls == [(local_prod.signal.SIGHUP, "old")]

@@ -270,6 +270,7 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
     )
     command = [
         sys.executable,
+        "-P",
         "-m",
         "uvicorn",
         "mijia_agent.app:create_app",
@@ -313,8 +314,9 @@ def send_command(
     conversation_id: str | None,
     history: list[dict[str, str]],
     home: str | None,
+    idempotency_key: str | None = None,
 ) -> tuple[dict, str]:
-    key = "local-prod-" + secrets.token_hex(16)
+    key = idempotency_key or "local-prod-" + secrets.token_hex(16)
     print(f"Idempotency-Key: {key}")
     try:
         response = client.post(
@@ -376,6 +378,7 @@ def run_repl(
     token: str,
     one_shot: str | None,
     home: str | None,
+    idempotency_key: str | None = None,
     input_fn=input,
     client_factory=httpx.Client,
 ) -> None:
@@ -392,7 +395,16 @@ def run_repl(
                     break
             if not text or text in {"/quit", "/exit"}:
                 break
-            body, _key = send_command(client, base_url, token, text, conversation_id, history, home)
+            body, _key = send_command(
+                client,
+                base_url,
+                token,
+                text,
+                conversation_id,
+                history,
+                home,
+                idempotency_key,
+            )
             print_response(body)
             if isinstance(body.get("conversationId"), str):
                 conversation_id = body["conversationId"]
@@ -409,6 +421,7 @@ def run_repl(
                 history = history[-MAX_HISTORY_MESSAGES:]
             if one_shot is not None:
                 break
+            idempotency_key = None
 
 
 def retain_log(source: Path, destination: Path) -> None:
@@ -437,7 +450,12 @@ def install_termination_handlers() -> dict[signal.Signals, object]:
 
 def restore_signal_handlers(previous: Mapping[signal.Signals, object]) -> None:
     for signum, handler in previous.items():
-        signal.signal(signum, handler)
+        if handler is None:
+            continue
+        try:
+            signal.signal(signum, handler)
+        except (OSError, TypeError, ValueError):
+            pass
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -451,6 +469,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--token-file", type=Path)
     parser.add_argument("--message", help="Send one prompt and exit instead of opening a REPL")
+    parser.add_argument(
+        "--idempotency-key",
+        help="Replay one --message with a previously printed key after checking its state",
+    )
     parser.add_argument("--home", help="Optional production home name or id")
     parser.add_argument("--keep-log", type=Path, help="Retain the sensitive LLM JSONL log here")
     parser.add_argument(
@@ -466,6 +488,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not 1 <= args.port <= 65535:
             raise CliError("Port must be between 1 and 65535")
+        if args.idempotency_key and not args.message:
+            raise CliError("--idempotency-key requires --message")
+        if args.idempotency_key and not (16 <= len(args.idempotency_key) <= 128):
+            raise CliError("--idempotency-key must be 16-128 characters")
         env = build_environment(args.env_file)
         settings = production_settings(env)
         print(target_summary(settings, args.host, args.port))
@@ -484,9 +510,8 @@ def main(argv: list[str] | None = None) -> int:
             process = start_agent(env, args.host, args.port)
             base_url = f"http://{args.host}:{args.port}"
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
-            run_repl(base_url, token, args.message, args.home)
+            run_repl(base_url, token, args.message, args.home, args.idempotency_key)
         finally:
-            restore_signal_handlers(previous_handlers)
             cleanup_error = None
             if process is not None:
                 try:
@@ -498,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
                     retain_log(log_path, args.keep_log)
             finally:
                 shutil.rmtree(log_dir, ignore_errors=True)
+            restore_signal_handlers(previous_handlers)
             if cleanup_error is not None:
                 raise cleanup_error
         return 0
