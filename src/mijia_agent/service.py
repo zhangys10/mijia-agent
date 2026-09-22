@@ -4,6 +4,7 @@ from typing import Protocol
 from .models import (
     AgentError,
     Decision,
+    DeviceStatus,
     Execution,
     HomeStatus,
     Result,
@@ -20,6 +21,7 @@ class Provider(Protocol):
 class Tools(Protocol):
     async def list_scenes(self, turn: Turn) -> list[Scene]: ...
     async def get_home_status(self, turn: Turn) -> HomeStatus: ...
+    async def get_device_status(self, turn: Turn) -> DeviceStatus: ...
     async def activate_scene(self, turn: Turn, alias: str) -> Execution: ...
 
 
@@ -81,6 +83,26 @@ class AgentService:
                 homeStatus=status,
                 tool=ToolResult(
                     name="get_home_status",
+                    status="partial_success" if status.completeness == "partial" else "success",
+                ),
+            )
+        if decision.tool == "get_device_status":
+            try:
+                status = await self.tools.get_device_status(turn)
+            except AgentError as error:
+                error.usage = decision.usage
+                raise
+            # Device states stay out of the reply text: values enter the structured field
+            # only, so conversation history and later model turns never carry them.
+            return Result(
+                **base,
+                message="当前家庭暂无可用的设备状态。"
+                if status.completeness == "empty"
+                else "已读取当前家庭设备状态。",
+                intent="get_device_status",
+                deviceStatus=status,
+                tool=ToolResult(
+                    name="get_device_status",
                     status="partial_success" if status.completeness == "partial" else "success",
                 ),
             )

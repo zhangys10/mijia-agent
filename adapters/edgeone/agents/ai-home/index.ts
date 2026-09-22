@@ -38,8 +38,11 @@ export async function onRequest(context: Context) {
       .filter(m => m.role === "user" || m.role === "assistant")
       .slice(-12).map(m => ({ role: m.role, content: m.content.slice(0, 2000) }));
     await store.state.set(receiptKey, { hash: fingerprint, status: "processing" });
+    // Only transport ambiguity (fetch failure, timeout, unreadable body) may mark the
+    // receipt uncertain. Everything after the response is readable has a known outcome.
+    let response: Response;
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         method: "POST", redirect: "error",
         signal: AbortSignal.any([AbortSignal.timeout(45000), ...(context.request.signal ? [context.request.signal] : [])]),
         headers: { Authorization: `Bearer ${pythonSecret}`, "Content-Type": "application/json" },
@@ -47,22 +50,50 @@ export async function onRequest(context: Context) {
           homeId: input.homeId, scopes: input.scopes, sessionBinding: input.sessionBinding,
           message, idempotencyKey: key, locale: body.locale ?? "zh-CN", timezone: body.timezone ?? "Asia/Shanghai", history }),
       });
-      const raw = await response.text();
-      if (raw.length > 65536) throw new Error("AI_AGENT_UNAVAILABLE");
-      const result = JSON.parse(raw) as Record<string, unknown>;
-      if (result.requestId !== requestId || (response.ok && (result.conversationId !== conversationId || typeof result.message !== "string"))) throw new Error("AI_AGENT_UNAVAILABLE");
-      // Persist the outcome before memory writes; append failure must not rerun the tool.
-      await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result, httpStatus: response.status });
-      if (response.ok) {
-        await store.appendMessage({ conversationId: scopedId, role: "user", content: message });
-        await store.appendMessage({ conversationId: scopedId, role: "assistant", content: String(result.message) });
-      }
-      return json(result, response.status);
     } catch {
       // Timeout/cancellation may happen after a physical effect. Never automatically replay.
       await store.state.set(receiptKey, { hash: fingerprint, status: "uncertain" });
       throw new Error("AI_EXECUTION_STATUS_UNKNOWN");
     }
+    const raw = await response.text();
+    // Every finalized read failure (empty, oversized, unparseable) writes a completed
+    // 502 receipt rather than leaving "processing", so retries replay instead of deadlocking.
+    if (raw.length > 65536 || raw.length === 0) {
+      await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result: { code: "AI_AGENT_UNAVAILABLE" }, httpStatus: 502 });
+      throw new Error("AI_AGENT_UNAVAILABLE");
+    }
+    let result: Record<string, unknown>;
+    try { result = JSON.parse(raw) as Record<string, unknown>; }
+    catch {
+      // An unparseable body is a finalized upstream failure, not an unknown effect.
+      await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result: { code: "AI_AGENT_UNAVAILABLE" }, httpStatus: 502 });
+      throw new Error("AI_AGENT_UNAVAILABLE");
+    }
+    const contractBroken = result.requestId !== requestId
+      || (response.ok && (result.conversationId !== conversationId || typeof result.message !== "string"));
+    if (contractBroken) {
+      // A failed upstream status proves no effect, so the retry is safe. A 200 whose
+      // body we cannot trust means the turn ran but its outcome is unreadable: uncertain.
+      if (response.ok) {
+        await store.state.set(receiptKey, { hash: fingerprint, status: "uncertain" });
+        throw new Error("AI_EXECUTION_STATUS_UNKNOWN");
+      }
+      await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result: { code: "AI_AGENT_UNAVAILABLE" }, httpStatus: 502 });
+      throw new Error("AI_AGENT_UNAVAILABLE");
+    }
+    // Persist the outcome before memory writes; append failure must not rerun the tool.
+    await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result, httpStatus: response.status });
+    if (response.ok) {
+      // The turn already succeeded; a history write failing must not fail the reply.
+      const remembered = await Promise.allSettled([
+        store.appendMessage({ conversationId: scopedId, role: "user", content: message }),
+        store.appendMessage({ conversationId: scopedId, role: "assistant", content: String(result.message) }),
+      ]);
+      for (const settled of remembered) {
+        if (settled.status === "rejected") console.error("[ai-home] history append failed after successful turn", settled.reason instanceof Error ? settled.reason.message : settled.reason);
+      }
+    }
+    return json(result, response.status);
   } catch (error) { return failure(error); }
   finally { if (lock) active.delete(lock); }
 }

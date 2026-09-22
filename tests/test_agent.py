@@ -13,6 +13,9 @@ from mijia_agent.gateway import Gateway, payload
 from mijia_agent.models import (
     AgentError,
     Decision,
+    DeviceStatus,
+    DeviceStatusItem,
+    DeviceStatusRoom,
     Execution,
     HomeStatus,
     HomeStatusGroup,
@@ -75,6 +78,21 @@ STATUS = HomeStatus(
     ],
     warnings=["部分设备读取失败"],
 )
+DEVICE_STATUS = DeviceStatus(
+    capturedAt="2026-09-21T08:00:00Z",
+    completeness="partial",
+    poweredOn=1,
+    rooms=[
+        DeviceStatusRoom(
+            room="客厅",
+            items=[
+                DeviceStatusItem(name="客厅吸顶灯", kind="light", state="on", online=True),
+                DeviceStatusItem(name="空气净化器", kind="airpurifier", state="off", online=True),
+            ],
+        )
+    ],
+    warnings=["部分设备状态暂时不可用。"],
+)
 
 
 class FakeProvider:
@@ -94,6 +112,7 @@ class FakeTools:
         self.calls = []
         self.result = Execution(status="success", message="已执行回家模式。")
         self.status = STATUS
+        self.device_status = DEVICE_STATUS
 
     async def list_scenes(self, turn):
         self.calls.append(("list", turn.principalId, turn.homeId))
@@ -102,6 +121,10 @@ class FakeTools:
     async def get_home_status(self, turn):
         self.calls.append(("status", turn.principalId, turn.homeId))
         return self.status
+
+    async def get_device_status(self, turn):
+        self.calls.append(("devices", turn.principalId, turn.homeId))
+        return self.device_status
 
     async def activate_scene(self, turn, alias):
         self.calls.append(("activate", turn.principalId, turn.homeId, alias))
@@ -180,6 +203,7 @@ def test_readonly_payload_does_not_advertise_activation():
     assert [tool["function"]["name"] for tool in request["tools"]] == [
         "list_scenes",
         "get_home_status",
+        "get_device_status",
     ]
     assert payload(turn(), [SCENE], settings())["tools"][-1]["function"]["name"] == (
         "activate_scene"
@@ -261,6 +285,73 @@ def test_home_status_result_never_carries_identifiers():
         assert forbidden not in raw
 
 
+def test_device_status_query_fetches_after_decision_and_returns_structured_result():
+    tools = FakeTools()
+    provider = FakeProvider(Decision(tool="get_device_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(message="客厅哪些灯开着")))
+    assert result.intent == "get_device_status"
+    assert result.message == "已读取当前家庭设备状态。"
+    assert result.deviceStatus == DEVICE_STATUS
+    assert result.tool is not None and result.tool.name == "get_device_status"
+    assert result.tool.status == "partial_success"
+    # Device states stay out of the reply text, so they never enter later model history.
+    assert "客厅吸顶灯" not in result.message
+    assert tools.calls[-1] == ("devices", "usr_example", "home-example")
+
+
+def test_device_status_query_needs_only_chat_scope():
+    tools = FakeTools()
+    provider = FakeProvider(Decision(tool="get_device_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(scopes=["ai:chat"])))
+    assert result.intent == "get_device_status"
+    assert tools.calls[-1] == ("devices", "usr_example", "home-example")
+
+
+def test_empty_device_status_reports_empty():
+    tools = FakeTools()
+    tools.device_status = DeviceStatus(
+        capturedAt="2026-09-21T08:00:00Z", completeness="empty", poweredOn=0
+    )
+    provider = FakeProvider(Decision(tool="get_device_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(message="家里还有灯亮着吗")))
+    assert result.message == "当前家庭暂无可用的设备状态。"
+    assert result.deviceStatus is not None and result.deviceStatus.rooms == []
+    assert result.tool.status == "success"
+
+
+def test_device_status_tool_failure_retains_usage():
+    class FailingTools(FakeTools):
+        async def get_device_status(self, turn):
+            self.calls.append(("devices", turn.principalId, turn.homeId))
+            raise AgentError("AI_AGENT_UNAVAILABLE")
+
+    tools = FailingTools()
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(
+            AgentService(FakeProvider(Decision(tool="get_device_status", usage=USAGE)), tools).run(
+                turn()
+            )
+        )
+    assert caught.value.usage == USAGE
+
+
+def test_device_status_result_never_carries_identifiers():
+    tools = FakeTools()
+    provider = FakeProvider(Decision(tool="get_device_status", usage=USAGE))
+    result = asyncio.run(AgentService(provider, tools).run(turn(message="卧室灯关了吗")))
+    raw = json.dumps(result.model_dump(exclude_none=True), ensure_ascii=False)
+    for forbidden in [
+        "usr_example",
+        "home-example",
+        "fake-opaque-binding",
+        "scene_0123456789abcdef",
+        "did",
+        "siid",
+        "piid",
+    ]:
+        assert forbidden not in raw
+
+
 def gateway_response(message, usage=None):
     body = {"choices": [{"message": message}]}
     if usage is not None:
@@ -305,6 +396,22 @@ def test_gateway_accepts_exact_home_status_call():
     assert result.tool == "get_home_status"
 
 
+def test_gateway_accepts_exact_device_status_call():
+    result = gateway_run(
+        lambda _: gateway_response(
+            {
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "get_device_status", "arguments": "{}"},
+                    }
+                ]
+            }
+        )
+    )
+    assert result.tool == "get_device_status"
+
+
 def test_gateway_missing_usage_estimates_full_tool_call():
     result = gateway_run(
         lambda _: gateway_response(
@@ -332,6 +439,7 @@ def test_gateway_missing_usage_estimates_full_tool_call():
         ("activate_scene", {"sceneId": SCENE.alias, "homeId": "other"}),
         ("list_scenes", {"unexpected": 1}),
         ("get_home_status", {"metric": "temperature"}),
+        ("get_device_status", {"room": "客厅"}),
     ],
 )
 def test_gateway_rejects_invented_tools_and_extra_arguments(name, args):
@@ -426,6 +534,62 @@ def test_status_tool_client_rejects_malformed_or_leaky_payloads():
         async def execute():
             async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
                 await ConsoleTools(settings(), client).get_home_status(turn())
+
+        with pytest.raises(AgentError, match="AI_AGENT_UNAVAILABLE"):
+            asyncio.run(execute())
+
+
+def test_device_status_tool_client_validates_strictly():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        body = json.loads(request.content)
+        assert body["tool"] == "get_device_status" and body["arguments"] == {}
+        return httpx.Response(200, json=DEVICE_STATUS.model_dump())
+
+    async def execute():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await ConsoleTools(settings(), client).get_device_status(turn())
+
+    assert asyncio.run(execute()) == DEVICE_STATUS
+    assert len(requests) == 1
+
+
+def test_device_status_tool_client_rejects_malformed_or_leaky_payloads():
+    leaked = DEVICE_STATUS.model_dump()
+    leaked["deviceIds"] = ["did-123456789"]
+    malformed = [
+        {"completeness": "complete"},  # missing capturedAt/poweredOn
+        {**DEVICE_STATUS.model_dump(), "extra": True},
+        {
+            **DEVICE_STATUS.model_dump(),
+            "rooms": [
+                {
+                    "room": "客厅",
+                    "items": [{"name": "灯", "kind": "light", "state": "halfway", "online": True}],
+                }
+            ],
+        },
+        {
+            **DEVICE_STATUS.model_dump(),
+            "rooms": [
+                {
+                    "room": "客厅",
+                    "items": [{"name": "灯", "kind": "light", "state": "on", "online": "yes"}],
+                }
+            ],
+        },
+        leaked,
+    ]
+    for payload_json in malformed:
+
+        def handler(request, payload_json=payload_json):
+            return httpx.Response(200, json=payload_json)
+
+        async def execute():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                await ConsoleTools(settings(), client).get_device_status(turn())
 
         with pytest.raises(AgentError, match="AI_AGENT_UNAVAILABLE"):
             asyncio.run(execute())

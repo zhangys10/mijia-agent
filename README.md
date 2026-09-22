@@ -17,6 +17,7 @@ No live deployment, model invocation, or device control was performed during ext
 3. [Service contracts](docs/contracts.md)
 4. [Implementation backlog](docs/TODO.md)
 5. [Deployment and rollback](docs/deployment.md)
+6. [Steward report alignment](docs/steward-report-alignment.md)
 
 The three original AI design documents are preserved in `docs/source-snapshot/`.
 They describe the TypeScript baseline; the documents above supersede their repo

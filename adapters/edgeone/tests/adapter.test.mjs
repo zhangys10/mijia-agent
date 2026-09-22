@@ -60,6 +60,81 @@ test("uncertain upstream outcome never automatically reruns", async t => {
   assert.equal(calls, 1);
 });
 
+test("memory append failure after a successful turn neither fails the reply nor poisons the receipt", async t => {
+  const { context, history } = fixture();
+  let appendCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "conv_test_123", message: "回复", intent: "none" });
+  });
+  const original = context.store.appendMessage;
+  // First append throws (simulating a store blip), the retry path recovers.
+  context.store.appendMessage = async params => {
+    appendCalls++;
+    if (appendCalls === 1) throw new Error("memory store unavailable");
+    return original(params);
+  };
+  const ok = await onRequest(context);
+  assert.equal(ok.status, 200);
+  // The receipt is completed with the real result, so a same-key replay returns 200, not 409.
+  context.request.body.requestId = "req_example_000002";
+  const replay = await (await onRequest(context)).json();
+  assert.equal(replay.requestId, "req_example_000002");
+  assert.equal((replay.usage?.totalTokens) ?? 0, 0);
+});
+
+test("unparseable upstream body is a finalized 502 that replays as 502, not 409", async t => {
+  const { context, state, history } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    // Runtime error pages (e.g. module load failure) arrive as HTML with a 404/502.
+    return new Response("<html>Error loading module</html>", { status: 404 });
+  });
+  const response = await onRequest(context);
+  assert.equal(response.status, 502);
+  assert.equal((await response.json()).code, "AI_AGENT_UNAVAILABLE");
+  const receipt = state.get("idem_" + await digest(JSON.stringify(["usr_test", "home-test", "idem_test_example_1"])));
+  assert.equal(receipt.status, "completed");
+  assert.equal(receipt.httpStatus, 502);
+  assert.equal(receipt.result.code, "AI_AGENT_UNAVAILABLE");
+  assert.equal(history.size, 0);
+  // Same key replays the finalized failure instead of re-running the turn.
+  const replay = await (await onRequest(context)).json();
+  assert.equal(replay.code, "AI_AGENT_UNAVAILABLE");
+  assert.equal(calls, 1);
+});
+
+test("confirmed 200 with a broken response contract stays uncertain and never reruns", async t => {
+  const { context } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    // 200 whose conversationId does not match ours: the turn ran upstream, its outcome is unreadable.
+    return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "cv_someone_else", message: "回复" });
+  });
+  assert.equal((await onRequest(context)).status, 409);
+  context.request.body.requestId = "req_example_000002";
+  assert.equal((await onRequest(context)).status, 409);
+  assert.equal(calls, 1);
+});
+
+test("failed upstream status with a broken body finalizes as 502 and replays", async t => {
+  const { context } = fixture();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    calls++;
+    return new Response("upstream exploded", { status: 500 });
+  });
+  assert.equal((await onRequest(context)).status, 502);
+  context.request.body.requestId = "req_example_000002";
+  assert.equal((await onRequest(context)).status, 502);
+  assert.equal(calls, 1);
+});
+
 test("structured homeStatus survives forwarding, receipt storage, and replay without entering history", async t => {
   const { context, history } = fixture();
   const homeStatus = {
@@ -80,6 +155,31 @@ test("structured homeStatus survives forwarding, receipt storage, and replay wit
   context.request.body.requestId = "req_example_000002";
   const replay = await (await onRequest(context)).json();
   assert.deepEqual(replay.homeStatus, homeStatus);
+  assert.equal(replay.requestId, "req_example_000002");
+  assert.equal(replay.usage.totalTokens, 0);
+});
+
+test("structured deviceStatus survives forwarding, receipt storage, and replay without entering history", async t => {
+  const { context, history } = fixture();
+  const deviceStatus = {
+    capturedAt: "2026-09-21T08:00:00Z",
+    completeness: "complete",
+    poweredOn: 1,
+    rooms: [{ room: "客厅", items: [{ name: "客厅吸顶灯", kind: "light", state: "on", online: true }] }],
+    warnings: [],
+  };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭设备状态。", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true });
+    return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
+  });
+  const first = await (await onRequest(context)).json();
+  assert.deepEqual(first.deviceStatus, deviceStatus);
+  // Only the generic message enters conversation history, never the structured states.
+  assert.equal([...history.values()][0][1].content, "已读取当前家庭设备状态。");
+  context.request.body.requestId = "req_example_000002";
+  const replay = await (await onRequest(context)).json();
+  assert.deepEqual(replay.deviceStatus, deviceStatus);
   assert.equal(replay.requestId, "req_example_000002");
   assert.equal(replay.usage.totalTokens, 0);
 });

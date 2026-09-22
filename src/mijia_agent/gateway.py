@@ -157,6 +157,8 @@ class Gateway:
                 return Decision(tool="list_scenes", usage=usage)
             if call["name"] == "get_home_status" and not args:
                 return Decision(tool="get_home_status", usage=usage)
+            if call["name"] == "get_device_status" and not args:
+                return Decision(tool="get_device_status", usage=usage)
             if call["name"] == "activate_scene" and {"sceneId"} <= set(args) <= {
                 "sceneId",
                 "replyMessage",
