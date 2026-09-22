@@ -473,6 +473,42 @@ def test_run_repl_skips_empty_sanitized_assistant_message():
     assert calls == [("first", []), ("second", [])]
 
 
+def test_run_repl_skips_whitespace_only_reply_and_trims_history():
+    prompts = iter(("first", "second"))
+    seen_histories = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def send(_client, _base_url, _token, text, conversation_id, history, home):
+        seen_histories.append(list(history))
+        return {
+            "requestId": "req_test",
+            "conversationId": "conv_test",
+            "status": "not_understood",
+            "intent": "none",
+            "message": "   ",
+        }, "key"
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(local_prod, "send_command", send)
+        local_prod.run_repl(
+            "http://local",
+            "secret-token",
+            None,
+            None,
+            input_fn=lambda _prompt: next(prompts, "/quit"),
+            client_factory=lambda **_kwargs: Client(),
+        )
+
+    # The whitespace-only reply must not enter history; the second turn stays valid.
+    assert seen_histories == [[], []]
+
+
 def test_send_command_treats_server_error_as_post_dispatch_failure():
     def handler(_request):
         return httpx.Response(502, json={"code": "MI_CLOUD_ERROR"})

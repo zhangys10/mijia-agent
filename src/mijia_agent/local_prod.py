@@ -521,11 +521,15 @@ def run_repl(
             if body.get("conversationReset") is True:
                 history.clear()
                 print("conversation: reset by server")
-            if isinstance(body.get("message"), str) and body["message"] and not body.get("code"):
+            reply = body.get("message")
+            # History entries must be non-empty after strip (server contract
+            # trims to 300 chars); a whitespace-only sanitized reply would
+            # poison the next turn's validation.
+            if isinstance(reply, str) and reply.strip() and not body.get("code"):
                 history.extend(
                     [
-                        {"role": "user", "content": text},
-                        {"role": "assistant", "content": body["message"]},
+                        {"role": "user", "content": text.strip()[:300]},
+                        {"role": "assistant", "content": reply.strip()[:300]},
                     ]
                 )
                 history = history[-MAX_HISTORY_MESSAGES:]
@@ -648,6 +652,16 @@ def main(argv: list[str] | None = None) -> int:
         confirm_production(args.i_understand_this_uses_production)
         if args.token_file is not None:
             token = load_token(args.token_file)
+        elif args.cookie_file is not None:
+            # Non-interactive: generate the token from the provided cookie file.
+            cookie = load_cookie(args.cookie_file)
+            token = generate_token(
+                args.console_repo,
+                cookie,
+                args.token_days,
+                args.home,
+                None,
+            )
         else:
             # Offer cookie-based generation inline; a path or 'token' pastes a ready-made token.
             choice = input(
