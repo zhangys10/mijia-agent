@@ -62,17 +62,18 @@ that it targets the HTTPS production console and inspect the redacted target:
 mijia-agent-local-prod check
 ```
 
-Then obtain a production automation token from the console settings UI and run either an
-interactive session or one bounded prompt:
+Then run an interactive session — the CLI generates the automation token from your pasted
+`xiaomi_session` cookie (hidden prompt) via the console repo's offline generator, or type
+`token` to paste a ready-made one:
 
 ```bash
 mijia-agent-local-prod run
 mijia-agent-local-prod run --message '我还没回家'
 ```
 
-The CLI reads the token through a hidden prompt, starts the real ASGI app on loopback,
-and shuts it down on exit. See [the live test guide](docs/PHASE1-MANUAL-TEST.md) for token
-files, retained logs, expected execution-gate behavior, and operational warnings.
+The CLI starts the real ASGI app on loopback and shuts it down on exit. See
+[the live test guide](docs/PHASE1-MANUAL-TEST.md) for cookie/token files, retained logs,
+expected execution-gate behavior, and operational warnings.
 
 ## EdgeOne adapter
 

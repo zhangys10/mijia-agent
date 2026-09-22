@@ -14,8 +14,10 @@ work is complete, production scene activation is expected to return
 - Python 3.11+ and the repo installed for development (`pip install --no-deps -e .`).
 - Production variables pulled with `edgeone makers env pull` (or `edgeone makers dev`) into
   the ignored `adapters/edgeone/.env`.
-- A production automation token (`v1.…`) issued by the production console settings UI
-  (设置 → AI 自动化配置). The CLI treats it as opaque; Python never decrypts it.
+- A sealed `xiaomi_session` cookie copied from the logged-in production console
+  (DevTools → Application → Cookies). The CLI turns it into an automation token by
+  delegating to the console repo's offline generator — the Python process never
+  implements Xiaomi session decryption.
 
 The pulled env must include the production Gateway fields, `AI_PYTHON_INTERNAL_SECRET`,
 `AI_TOOLS_INTERNAL_SECRET`, and an HTTPS production `MIJIA_CONSOLE_BASE_URL`. It may carry
@@ -53,7 +55,9 @@ The CLI will:
 1. print the redacted production target;
 2. warn about real data, cost, and possible effects;
 3. require the exact acknowledgement `USE PRODUCTION SERVICES`;
-4. read the automation token through a hidden prompt;
+4. generate the automation token from your pasted `xiaomi_session` cookie by default —
+   press Enter, paste the cookie at the hidden prompt, and the CLI delegates to the
+   console repo's offline generator (type `token` instead to paste a ready-made token);
 5. start the real Uvicorn app on `127.0.0.1:8000`;
 6. send each prompt through the existing `POST /ai/command` HTTP boundary; and
 7. stop the child process and delete its private LLM log on exit.
@@ -78,19 +82,25 @@ change the agent, tool secret, or console route to bypass it.
 
 ## Secure token files
 
-The default hidden prompt is preferred. For deliberate automation, put only the opaque
-token in an owner-only file:
+`run` generates a fresh token in memory by default (paste the cookie at the hidden
+prompt); it is never printed or written to disk. To pre-generate one for repeated use:
 
 ```bash
-chmod 600 /path/to/automation-token
-mijia-agent-local-prod run --token-file /path/to/automation-token
+mijia-agent-local-prod generate-token --cookie-file /path/to/cookie --token-out /path/to/automation-token
 ```
 
-The CLI refuses group/world-readable token files. Do not put the token on the command line,
-in a repo file, or in shell history. The token is held only by the parent CLI and sent to
-the loopback route; it is not added to the child environment or Uvicorn argv. Proxy
-environment variables are disabled for both loopback and production requests so credentials
-cannot be captured by an inherited HTTP(S) proxy.
+Both files must be owner-only (`chmod 600`); the CLI refuses group/world-readable inputs
+and always writes the token file `0600`. The cookie file and the generated token must never
+be committed, put on a command line, or left in shell history. During `run`, the token is
+held only by the parent CLI and sent to the loopback route; it is not added to the child
+environment or Uvicorn argv. Proxy environment variables are disabled for both loopback and
+production requests so credentials cannot be captured by an inherited HTTP(S) proxy.
+
+Token generation requires the console checkout (default `../mijia-web-console`, override
+with `--console-repo`) because sealing uses the console's own libraries and the
+`AI_AUTOMATION_TOKEN_SECRET` / `XIAOMI_SESSION_SECRET` values from the pulled env file.
+Generated tokens bind to `NODE_ENV=production`, matching the deployed console; a token from
+a differently configured console is rejected at verification time.
 
 Automation can skip the typed phrase with the intentionally explicit
 `--i-understand-this-uses-production` flag. This acknowledges production use; it does not

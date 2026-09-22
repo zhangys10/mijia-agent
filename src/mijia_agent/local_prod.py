@@ -37,6 +37,9 @@ from .config import Settings
 
 ACKNOWLEDGEMENT = "USE PRODUCTION SERVICES"
 DEFAULT_ENV_FILE = Path("adapters/edgeone/.env")
+DEFAULT_CONSOLE_REPO = Path("..") / "mijia-web-console"
+CONSOLE_TOKEN_SCRIPT = Path("scripts") / "generate-automation-token.ts"
+CONSOLE_ENV_KEYS = ("AI_AUTOMATION_TOKEN_SECRET", "XIAOMI_SESSION_SECRET")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 READINESS_TIMEOUT_SECONDS = 15.0
@@ -110,7 +113,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
             value = value[1:-1]
             if quote == '"' and ("$" in value or "`" in value or "\\" in value):
                 raise CliError(f"Shell interpolation is not supported at {path}:{number}")
-        elif any(token in value for token in ("$", "`", "$(`", ";")):
+        elif any(token in value for token in ("$", "`", ";")):
             raise CliError(f"Shell syntax is not supported at {path}:{number}")
         result[key] = value
     return result
@@ -219,6 +222,109 @@ def load_token(token_file: Path | None, prompt_fn=None) -> str:
             raise CliError(f"Cannot read token file: {token_file}") from error
     if not token or len(token) > MAX_AUTOMATION_TOKEN:
         raise CliError("Automation token is empty or too long")
+    return token
+
+
+def load_cookie(cookie_file: Path | None, prompt_fn=None) -> str:
+    """Read the pasted ``xiaomi_session`` cookie without echoing it by default."""
+
+    if cookie_file is None:
+        reader = getpass.getpass if prompt_fn is None else prompt_fn
+        cookie = reader("xiaomi_session cookie value (paste and press Enter): ").strip()
+    else:
+        try:
+            mode = stat.S_IMODE(cookie_file.stat().st_mode)
+            if mode & 0o077:
+                raise CliError("Cookie file must be owner-only (chmod 600)")
+            cookie = cookie_file.read_text(encoding="utf-8").strip()
+        except CliError:
+            raise
+        except OSError as error:
+            raise CliError(f"Cannot read cookie file: {cookie_file}") from error
+    if not cookie:
+        raise CliError("Pasted cookie is empty")
+    if any(character in cookie for character in "\n\r\t"):
+        raise CliError("Pasted cookie contains unexpected whitespace")
+    return cookie
+
+
+def generate_token(
+    console_repo: Path,
+    cookie: str,
+    env_file: Path,
+    days: int,
+    home: str | None,
+    token_out: Path | None,
+    popen=None,
+) -> str:
+    """Delegate token sealing to the console repo's offline generator.
+
+    The cookie is passed through a private temporary file (never argv or env);
+    the generated token is returned through a pipe so it is never echoed or
+    logged. Python never implements Xiaomi session decryption.
+    """
+
+    if not (1 <= days <= 90):
+        raise CliError("--token-days must be between 1 and 90")
+    script = console_repo / CONSOLE_TOKEN_SCRIPT
+    if not script.is_file():
+        raise CliError(f"Console token script not found: {script}")
+
+    loaded = parse_env_file(env_file)
+    missing = [key for key in CONSOLE_ENV_KEYS if not loaded.get(key)]
+    if missing:
+        raise CliError(f"Env file is missing token-generation secrets: {', '.join(missing)}")
+    child_env = {key: loaded[key] for key in CONSOLE_ENV_KEYS if key in loaded}
+    child_env["NODE_ENV"] = "production"
+
+    directory = Path(tempfile.mkdtemp(prefix="mijia-agent-cookie-"))
+    directory.chmod(0o700)
+    cookie_path = directory / "cookie.txt"
+    try:
+        with open(cookie_path, "w", encoding="utf-8") as handle:
+            handle.write(cookie)
+        cookie_path.chmod(0o600)
+
+        command = [
+            "node",
+            "--experimental-strip-types",
+            str(script),
+            "--session-file",
+            str(cookie_path),
+            "--days",
+            str(days),
+        ]
+        if home:
+            command.extend(["--home", home])
+        runner = subprocess.Popen if popen is None else popen
+        try:
+            process = runner(
+                command,
+                env=child_env,
+                cwd=str(console_repo),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as error:
+            raise CliError("Could not run the console token generator") from error
+        _stdout, _stderr = process.communicate()
+        if process.returncode != 0:
+            raise CliError("Console token generator failed; check the env file secrets")
+        token = _stdout.strip().splitlines()[-1] if _stdout.strip() else ""
+        if not token.startswith("v1.") or len(token) > MAX_AUTOMATION_TOKEN:
+            raise CliError("Console token generator returned an unexpected response")
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+    if token_out is not None:
+        try:
+            token_out.write_text(token + "\n", encoding="utf-8")
+            token_out.chmod(0o600)
+        except OSError as error:
+            raise CliError(f"Could not write token file: {token_out}") from error
+        print(f"Token written to {token_out} (mode 0600).")
     return token
 
 
@@ -466,8 +572,21 @@ def create_parser() -> argparse.ArgumentParser:
         prog="mijia-agent-local-prod",
         description="Run the local agent against live production dependencies.",
     )
-    parser.add_argument("command", choices=("check", "run"))
+    parser.add_argument("command", choices=("check", "run", "generate-token"))
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
+    parser.add_argument(
+        "--console-repo",
+        type=Path,
+        default=DEFAULT_CONSOLE_REPO,
+        help="Path to the mijia-web-console checkout that owns token generation",
+    )
+    parser.add_argument(
+        "--cookie-file",
+        type=Path,
+        help="File holding the pasted xiaomi_session cookie (owner-only file recommended)",
+    )
+    parser.add_argument("--token-days", type=int, default=30, help="Token validity in days (1-90)")
+    parser.add_argument("--token-out", type=Path, help="Write the generated token to this file")
     parser.add_argument("--host", default=DEFAULT_HOST, choices=("127.0.0.1", "localhost"))
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--token-file", type=Path)
@@ -505,9 +624,44 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "check":
             print("Configuration is valid. No network calls were made.")
             return 0
+        if args.command == "generate-token":
+            cookie = load_cookie(args.cookie_file)
+            generate_token(
+                args.console_repo,
+                cookie,
+                args.env_file,
+                args.token_days,
+                args.home,
+                args.token_out,
+            )
+            if args.token_out is None:
+                print(
+                    "Token generated successfully. It was not printed or written anywhere; "
+                    "use run without --token-file to generate and use one in memory."
+                )
+            return 0
 
         confirm_production(args.i_understand_this_uses_production)
-        token = load_token(args.token_file)
+        if args.token_file is not None:
+            token = load_token(args.token_file)
+        else:
+            # Offer cookie-based generation inline; fall back to a raw token paste.
+            paste_cookie = input(
+                "Press Enter to paste the xiaomi_session cookie (type 'token' to paste a "
+                "ready-made token instead): "
+            ).strip()
+            if paste_cookie == "token":
+                token = load_token(None)
+            else:
+                cookie = load_cookie(None)
+                token = generate_token(
+                    args.console_repo,
+                    cookie,
+                    args.env_file,
+                    args.token_days,
+                    args.home,
+                    None,
+                )
         ensure_port_available(args.host, args.port)
         log_dir, log_path = private_log_path()
         env["AI_LLM_LOG_PATH"] = str(log_path)

@@ -187,6 +187,190 @@ def test_token_file_must_be_owner_only_and_token_stays_out_of_child_env(tmp_path
     assert token not in local_prod.build_environment(env_path).values()
 
 
+def test_load_cookie_hides_prompt_and_rejects_whitespace(tmp_path):
+    cookie = local_prod.load_cookie(None, prompt_fn=lambda _prompt: " sealed-cookie-value ")
+    assert cookie == "sealed-cookie-value"
+
+    cookie_path = tmp_path / "cookie.txt"
+    cookie_path.write_text("pasted-cookie\n", encoding="utf-8")
+    cookie_path.chmod(0o644)
+    with pytest.raises(local_prod.CliError, match="chmod 600"):
+        local_prod.load_cookie(cookie_path)
+
+    cookie_path.chmod(0o600)
+    assert local_prod.load_cookie(cookie_path) == "pasted-cookie"
+
+    multiline = tmp_path / "multiline.txt"
+    multiline.write_text("a\nb\n", encoding="utf-8")
+    multiline.chmod(0o600)
+    with pytest.raises(local_prod.CliError, match="unexpected whitespace"):
+        local_prod.load_cookie(multiline)
+
+
+def test_generate_token_delegates_via_private_file(tmp_path):
+    env_path = tmp_path / ".env"
+    write_env(
+        env_path,
+        PROD_ENV
+        | {
+            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
+            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
+        },
+    )
+    script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")
+
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+
+        class Proc:
+            returncode = 0
+
+            def communicate(self):
+                return "prefix lines\nv1.generated-token\n", ""
+
+        return Proc()
+
+    token = local_prod.generate_token(
+        tmp_path / "fake-console",
+        "pasted-cookie-value",
+        env_path,
+        30,
+        None,
+        None,
+        popen=fake_popen,
+    )
+
+    assert token == "v1.generated-token"
+    command = captured["command"]
+    session_file = Path(command[command.index("--session-file") + 1])
+    assert not session_file.exists()  # cookie temp file removed
+    assert "pasted-cookie-value" not in " ".join(command)
+    child_env = captured["env"]
+    assert child_env["NODE_ENV"] == "production"
+    assert child_env["AI_AUTOMATION_TOKEN_SECRET"].startswith("console-automation")
+    assert child_env["XIAOMI_SESSION_SECRET"].startswith("console-session")
+
+
+def test_generate_token_rejects_missing_secrets_and_bad_days(tmp_path):
+    env_path = tmp_path / ".env"
+    write_env(env_path, PROD_ENV)
+    script_path = tmp_path / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("// stub\n", encoding="utf-8")
+
+    with pytest.raises(local_prod.CliError, match="missing token-generation secrets"):
+        local_prod.generate_token(
+            tmp_path, "cookie", env_path, 30, None, None, popen=lambda *_a, **_k: None
+        )
+
+    full_env = tmp_path / "full.env"
+    write_env(
+        full_env,
+        PROD_ENV
+        | {
+            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
+            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
+        },
+    )
+    with pytest.raises(local_prod.CliError, match="between 1 and 90"):
+        local_prod.generate_token(
+            tmp_path, "cookie", full_env, 91, None, None, popen=lambda *_a, **_k: None
+        )
+
+
+def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
+    env_path = tmp_path / ".env"
+    write_env(
+        env_path,
+        PROD_ENV
+        | {
+            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
+            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
+        },
+    )
+    script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")
+
+    def fake_popen(command, **kwargs):
+        class Proc:
+            returncode = 0
+
+            def communicate(self):
+                return "v1.generated-token\n", ""
+
+        return Proc()
+
+    token = local_prod.generate_token(
+        tmp_path / "fake-console",
+        "pasted-cookie-value",
+        env_path,
+        30,
+        None,
+        tmp_path / "token.txt",
+        popen=fake_popen,
+    )
+
+    assert token == "v1.generated-token"
+    assert token not in capsys.readouterr().out
+    written = tmp_path / "token.txt"
+    assert stat.S_IMODE(written.stat().st_mode) == 0o600
+    assert written.read_text(encoding="utf-8").strip() == "v1.generated-token"
+
+
+def test_main_generate_token_writes_owner_only_file(tmp_path, monkeypatch, capsys):
+    env_path = tmp_path / ".env"
+    write_env(
+        env_path,
+        PROD_ENV
+        | {
+            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
+            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
+        },
+    )
+    script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")
+
+    def fake_popen(command, **kwargs):
+        class Proc:
+            returncode = 0
+
+            def communicate(self):
+                return "v1.generated-token\n", ""
+
+        return Proc()
+
+    monkeypatch.setattr(local_prod.subprocess, "Popen", fake_popen)
+    monkeypatch.chdir(tmp_path)
+    cookie_path = tmp_path / "cookie.txt"
+    cookie_path.write_text("pasted-cookie\n", encoding="utf-8")
+    cookie_path.chmod(0o600)
+
+    result = local_prod.main(
+        [
+            "generate-token",
+            "--env-file",
+            str(env_path),
+            "--console-repo",
+            str(tmp_path / "fake-console"),
+            "--cookie-file",
+            str(cookie_path),
+            "--token-out",
+            str(tmp_path / "token.txt"),
+        ]
+    )
+
+    assert result == 0
+    assert "v1.generated-token" not in capsys.readouterr().out
+    assert stat.S_IMODE((tmp_path / "token.txt").stat().st_mode) == 0o600
+
+
 def test_private_log_path_has_owner_only_permissions():
     directory, path = local_prod.private_log_path()
     try:
