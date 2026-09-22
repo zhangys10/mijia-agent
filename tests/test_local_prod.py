@@ -208,15 +208,6 @@ def test_load_cookie_hides_prompt_and_rejects_whitespace(tmp_path):
 
 
 def test_generate_token_delegates_via_private_file(tmp_path):
-    env_path = tmp_path / ".env"
-    write_env(
-        env_path,
-        PROD_ENV
-        | {
-            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
-            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
-        },
-    )
     script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
     script_path.parent.mkdir(parents=True)
     script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")
@@ -238,7 +229,6 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     token = local_prod.generate_token(
         tmp_path / "fake-console",
         "pasted-cookie-value",
-        env_path,
         30,
         None,
         None,
@@ -250,49 +240,24 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     session_file = Path(command[command.index("--session-file") + 1])
     assert not session_file.exists()  # cookie temp file removed
     assert "pasted-cookie-value" not in " ".join(command)
+    # The console script auto-reads its own .env for the secrets; the agent's
+    # child env must carry nothing sensitive at all.
     child_env = captured["env"]
-    assert child_env["NODE_ENV"] == "production"
-    assert child_env["AI_AUTOMATION_TOKEN_SECRET"].startswith("console-automation")
-    assert child_env["XIAOMI_SESSION_SECRET"].startswith("console-session")
+    assert set(child_env) <= {"PATH", "HOME"}
+    assert "AI_AUTOMATION_TOKEN_SECRET" not in child_env
+    assert "XIAOMI_SESSION_SECRET" not in child_env
 
 
-def test_generate_token_rejects_missing_secrets_and_bad_days(tmp_path):
-    env_path = tmp_path / ".env"
-    write_env(env_path, PROD_ENV)
+def test_generate_token_rejects_bad_days(tmp_path):
     script_path = tmp_path / "scripts" / "generate-automation-token.ts"
     script_path.parent.mkdir(parents=True)
     script_path.write_text("// stub\n", encoding="utf-8")
 
-    with pytest.raises(local_prod.CliError, match="missing token-generation secrets"):
-        local_prod.generate_token(
-            tmp_path, "cookie", env_path, 30, None, None, popen=lambda *_a, **_k: None
-        )
-
-    full_env = tmp_path / "full.env"
-    write_env(
-        full_env,
-        PROD_ENV
-        | {
-            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
-            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
-        },
-    )
     with pytest.raises(local_prod.CliError, match="between 1 and 90"):
-        local_prod.generate_token(
-            tmp_path, "cookie", full_env, 91, None, None, popen=lambda *_a, **_k: None
-        )
+        local_prod.generate_token(tmp_path, "cookie", 91, None, None, popen=lambda *_a, **_k: None)
 
 
 def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
-    env_path = tmp_path / ".env"
-    write_env(
-        env_path,
-        PROD_ENV
-        | {
-            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
-            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
-        },
-    )
     script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
     script_path.parent.mkdir(parents=True)
     script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")
@@ -309,7 +274,6 @@ def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
     token = local_prod.generate_token(
         tmp_path / "fake-console",
         "pasted-cookie-value",
-        env_path,
         30,
         None,
         tmp_path / "token.txt",
@@ -325,14 +289,7 @@ def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
 
 def test_main_generate_token_writes_owner_only_file(tmp_path, monkeypatch, capsys):
     env_path = tmp_path / ".env"
-    write_env(
-        env_path,
-        PROD_ENV
-        | {
-            "AI_AUTOMATION_TOKEN_SECRET": "console-automation-secret-0123456789",
-            "XIAOMI_SESSION_SECRET": "console-session-secret-0123456789",
-        },
-    )
+    write_env(env_path)
     script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
     script_path.parent.mkdir(parents=True)
     script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")

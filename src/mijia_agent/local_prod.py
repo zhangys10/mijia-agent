@@ -39,7 +39,6 @@ ACKNOWLEDGEMENT = "USE PRODUCTION SERVICES"
 DEFAULT_ENV_FILE = Path("adapters/edgeone/.env")
 DEFAULT_CONSOLE_REPO = Path("..") / "mijia-web-console"
 CONSOLE_TOKEN_SCRIPT = Path("scripts") / "generate-automation-token.ts"
-CONSOLE_ENV_KEYS = ("AI_AUTOMATION_TOKEN_SECRET", "XIAOMI_SESSION_SECRET")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 READINESS_TIMEOUT_SECONDS = 15.0
@@ -251,7 +250,6 @@ def load_cookie(cookie_file: Path | None, prompt_fn=None) -> str:
 def generate_token(
     console_repo: Path,
     cookie: str,
-    env_file: Path,
     days: int,
     home: str | None,
     token_out: Path | None,
@@ -260,8 +258,10 @@ def generate_token(
     """Delegate token sealing to the console repo's offline generator.
 
     The cookie is passed through a private temporary file (never argv or env);
-    the generated token is returned through a pipe so it is never echoed or
-    logged. Python never implements Xiaomi session decryption.
+    the generator auto-loads the console project's own `.env` for the sealing
+    secrets, so the Python process never touches Xiaomi session decryption or
+    the console's token secrets. The generated token returns through a pipe and
+    is never echoed or logged.
     """
 
     if not (1 <= days <= 90):
@@ -269,13 +269,6 @@ def generate_token(
     script = console_repo / CONSOLE_TOKEN_SCRIPT
     if not script.is_file():
         raise CliError(f"Console token script not found: {script}")
-
-    loaded = parse_env_file(env_file)
-    missing = [key for key in CONSOLE_ENV_KEYS if not loaded.get(key)]
-    if missing:
-        raise CliError(f"Env file is missing token-generation secrets: {', '.join(missing)}")
-    child_env = {key: loaded[key] for key in CONSOLE_ENV_KEYS if key in loaded}
-    child_env["NODE_ENV"] = "production"
 
     directory = Path(tempfile.mkdtemp(prefix="mijia-agent-cookie-"))
     directory.chmod(0o700)
@@ -300,7 +293,10 @@ def generate_token(
         try:
             process = runner(
                 command,
-                env=child_env,
+                env={
+                    "PATH": os.environ.get("PATH", os.defpath),
+                    "HOME": os.environ.get("HOME", ""),
+                },
                 cwd=str(console_repo),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -309,9 +305,11 @@ def generate_token(
             )
         except OSError as error:
             raise CliError("Could not run the console token generator") from error
-        _stdout, _stderr = process.communicate()
+        _stdout, stderr = process.communicate()
         if process.returncode != 0:
-            raise CliError("Console token generator failed; check the env file secrets")
+            detail = (stderr or "").strip().splitlines()
+            hint = detail[-1] if detail else "unknown error"
+            raise CliError(f"Console token generator failed: {hint}")
         token = _stdout.strip().splitlines()[-1] if _stdout.strip() else ""
         if not token.startswith("v1.") or len(token) > MAX_AUTOMATION_TOKEN:
             raise CliError("Console token generator returned an unexpected response")
@@ -320,6 +318,7 @@ def generate_token(
 
     if token_out is not None:
         try:
+            token_out.parent.mkdir(parents=True, exist_ok=True)
             token_out.write_text(token + "\n", encoding="utf-8")
             token_out.chmod(0o600)
         except OSError as error:
@@ -629,7 +628,6 @@ def main(argv: list[str] | None = None) -> int:
             generate_token(
                 args.console_repo,
                 cookie,
-                args.env_file,
                 args.token_days,
                 args.home,
                 args.token_out,
@@ -645,19 +643,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.token_file is not None:
             token = load_token(args.token_file)
         else:
-            # Offer cookie-based generation inline; fall back to a raw token paste.
-            paste_cookie = input(
-                "Press Enter to paste the xiaomi_session cookie (type 'token' to paste a "
-                "ready-made token instead): "
+            # Offer cookie-based generation inline; a path or 'token' pastes a ready-made token.
+            choice = input(
+                "Paste the xiaomi_session cookie to generate a token, or enter a token file "
+                "path, or type 'token' to paste a ready-made token: "
             ).strip()
-            if paste_cookie == "token":
+            if choice == "token":
                 token = load_token(None)
+            elif choice and Path(choice).expanduser().is_file():
+                token = load_token(Path(choice).expanduser())
             else:
-                cookie = load_cookie(None)
+                cookie = load_cookie(None, prompt_fn=lambda _prompt: choice)
                 token = generate_token(
                     args.console_repo,
                     cookie,
-                    args.env_file,
                     args.token_days,
                     args.home,
                     None,
