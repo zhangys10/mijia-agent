@@ -1,5 +1,10 @@
 # Implementation backlog
 
+The [steward report alignment](steward-report-alignment.md) doc maps the 云栖管家
+architecture report to this repo and the web console, and slices the remaining work
+(P0–P3) against the milestones below. Resolve its drift ledger (deployment evidence,
+`get_home_status` command parity) before starting new capability.
+
 ## Completed extraction
 
 - [x] Read every repository document and review PRs #29–31 instead of copying main alone.
