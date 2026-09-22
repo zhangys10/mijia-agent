@@ -1,399 +1,320 @@
 # Steward report alignment
 
-**Inputs:** `mijia-steward-report.html` (云栖管家 architecture decision, 2026.09),
-`mijia-agent` @ `origin/main` `e34164d`, `mijia-web-console` @ `origin/main` `6108e33`
-plus branch `feat/ai-tools-user-token-path`, and live probes of
-`https://agent.fabloki.xyz` (2026-09-21).
+**Inputs:** `mijia-steward-report.html` (云栖管家 architecture decision, 2026.09);
+`mijia-agent` @ `origin/main` `b5f5716`; `mijia-web-console` @ `origin/main` `eb67bf1`.
 
-**Purpose:** reconcile the report's recommendations with the two-repo reality, keep
-one milestone taxonomy (M1–M4), and define the next implementation slices. This
-document records verified state; where source survey, repos, or production disagree,
-the disagreement is listed as drift, not resolved by assumption.
+**Method:** every status claim below is read from the code in those two commits, cited
+as `path:line`. `docs/TODO.md` is **not** a source — its checklist is historical and
+does not describe current behaviour. Deployment topology is out of scope: the system is
+two EdgeOne Makers projects (webapp; agent + Python) and no deployment workstream is
+proposed here.
 
-**Labels:** `implemented` (working and tested) · `partial` (exists but
-gated/incomplete) · `missing` (not started) · `intentionally different` (a deliberate
-divergence from the report, kept).
+**Labels:** `implemented` (working in code today) · `partial` (exists but gated or
+incomplete) · `missing` (no code) · `intentionally different` (deliberate divergence
+from the report, kept).
 
 ## 1. Verdict
 
 The report's core recommendation — borrow the interaction/orchestration shell, but
-never put Mijia credentials, device control, or voice into the edge function — is
-already realized, in a different shape than it proposed. The shell was not borrowed
-from `AI-Chat-Assistant`; it was extracted into a two-repo split: `mijia-web-console`
-owns identity, Xiaomi protocol, and the deterministic executor; `mijia-agent` owns
-model calls and intent. The report's invariants (no generic tools, credentials never
-model-visible, KV never a source of truth, deterministic executor) are all preserved,
-several more strictly than proposed.
+never put Mijia credentials, device control, or voice in the edge function — is
+realized, in a different shape than proposed. Rather than wrapping
+`AI-Chat-Assistant`, the shell was split: `mijia-web-console` owns identity, the
+Xiaomi protocol, the tool facade, and (future) execution; `mijia-agent` owns model
+calls, intent, and the Makers adapter. Every report invariant survives — no generic
+tools, credentials never model-visible, KV never a source of truth, a deterministic
+executor — several of them more strictly than proposed.
 
-The remaining 30% the report called "production capability" maps exactly onto the
-open milestones: durable executor (M2), quota/cutover (M3), memory (M4), voice
-(post-M4). The single most urgent item is not new capability: it is closing the
-deployment-evidence drift (§4.2) and the `get_home_status` pipeline drift (§4.1).
+The one deliberate divergence in tool design: the report proposed per-device semantic
+tools (`set_power`, `set_room_temperature`, `set_light`, `run_scene`). The code instead
+exposes **scene-level and read-only** tools only. That is narrower, not weaker — the
+blast radius of a model mistake is one reviewed manual scene rather than an arbitrary
+property write — and it should be kept until a durable executor exists.
 
-## 2. Target architecture
+The remaining gap to the report's target is capability, not architecture: durable
+execution, quota settlement, memory, voice. §4 names them with code evidence; §6 turns
+them into workstreams.
+
+## 2. Target architecture (two EdgeOne Makers projects)
 
 ```mermaid
 flowchart TD
-    subgraph Console["mijia-web-console — EdgeOne Makers + Next (identity, Xiaomi, executor)"]
-        Panel["Assistant panel (cookie auth, JSON)"]
-        Chat["Web Chat API /api/ai/chat, /conversations, /quota"]
-        Tools["Tool facade /api/ai/tools: authorize, list_scenes, get_home_status, activate_scene*"]
-        Exec["Deterministic executor + durable receipt ledger (M2, unbuilt)"]
-        KV["Quota KV (soft limits only, M3)"]
-        Mi["Xiaomi cloud protocol: QR login, session, MIoT, AppSceneService"]
-    end
-    subgraph Agent["mijia-agent — adapters/edgeone (model + intent)"]
-        Adapter["Makers adapter /ai-home: 12-msg history, receipts, stop, delete"]
-        Py["Python ASGI: /internal/v1/turn, /ai/command"]
-        GW["Makers AI Gateway (env-injected key, model allowlist)"]
-    end
-    Panel --> Chat
-    Chat -->|"sealed binding + AI_AGENT_INTERNAL_SECRET"| Adapter
-    Adapter -->|"AI_PYTHON_INTERNAL_SECRET"| Py
-    Py --> GW
-    Py -->|"AI_TOOLS_INTERNAL_SECRET + binding/token"| Tools
-    Tools --> Mi
-    Exec --> Mi
-    Adapter -.->|"M3: reserve/commit/release + /api/internal/quota"| KV
-    subgraph Memory["M4 (unbuilt): summary | preferences | home semantics"]
-        Msum["recent-turn summary"]
-        Mpref["preferences, consent-gated"]
-        Msem["home entity semantics"]
-    end
-    Adapter -.-> Msum
-    Tools -.-> Msem
-    Console -.-> Mpref
+  subgraph Webapp["Makers project 1 — web console (webapp)"]
+    Panel["Assistant panel — cookie auth, JSON"]
+    Chat["Web Chat API /api/ai/chat, /conversations, /quota"]
+    Facade["Tool facade /api/ai/tools — authorize, list_scenes, get_home_status, get_device_status, activate_scene*"]
+    Exec["Executor runManualScene + future durable ledger (unbuilt)"]
+    XM["Xiaomi cloud — QR login, session, MIoT, AppSceneService"]
+  end
+  subgraph Agent["Makers project 2 — agent + Python"]
+    Routes["Makers agent routes /ai-home, /ai-home/delete, /ai-home/stop"]
+    Py["Python ASGI /internal/v1/turn, /ai/command"]
+    GW["Makers AI Gateway — env key, model allowlist"]
+  end
+  Panel --> Chat
+  Chat -->|"sealed binding + AI_AGENT_INTERNAL_SECRET"| Routes
+  Routes -->|"AI_PYTHON_INTERNAL_SECRET"| Py
+  Py --> GW
+  Py -->|"AI_TOOLS_INTERNAL_SECRET + binding or user token"| Facade
+  Facade --> XM
+  Exec --> XM
 ```
 
-Inviolable boundary: Xiaomi credentials, protocol, real scene IDs, DIDs, and
-principal derivation never leave the Console subgraph. The model sees only sanitized
-scene aliases, names, descriptions, and structured environment readings; the
-executor's status always wins over model text.
+Inviolable boundary: Xiaomi credentials, protocol, real scene IDs, DIDs and principal
+derivation never leave the webapp project. The model sees only user text, bounded
+history, locale/timezone, and sanitized scene summaries; structured readings/states are
+fetched after tool selection and never enter model messages or conversation history
+(`src/mijia_agent/service.py:67-113`).
 
-## 3. Report → current-state scorecard
+## 3. Code-truth scorecard
 
-| # | Report recommendation | Current state (evidence) | Label |
+| # | Report target | What the code does today | Label |
 |---|---|---|---|
-| 1 | Borrow chat widget/SSE shell from AI-Chat-Assistant | Console-built panel (`app/components/ai-assistant/`), cookie-auth JSON, no SSE | intentionally different |
-| 2 | Single EdgeOne Function for auth+memory+gateway+validation+audit | Split: console Web Chat → Makers adapter → Python, three independently rotated secrets | intentionally different |
-| 3 | AI Gateway with own key, no free-tier reliance | `AI_GATEWAY_API_KEY/BASE_URL/MODEL` env-injected in Python, allowlist, no BYOK | implemented |
-| 4 | Device gateway wrapping Xiaomi protocol | Console `lib/xiaomi-cloud.ts`, `lib/xiaomi-scenes.ts` (pre-extraction), stays console-side | implemented |
-| 5 | Xiaomi route decision gate (OAuth vs unofficial vs HA) | Unofficial cloud API inside console; HA is a preserved future executor adapter | implemented (historic choice) |
-| 6 | Semantic bounded tools (`set_power`, `set_room_temperature`, `set_light`, `run_scene`, …) | `list_scenes`, `get_home_status`, `activate_scene` only | intentionally different (scene-level, narrower blast radius) |
-| 7 | Ban generic `call_api`/`set_property(did,siid,piid)` | Strict fail-closed validation in Python (`gateway.py`, Pydantic `extra="forbid"`) and console (`remote-tool-service.ts`) | implemented (stronger) |
-| 8 | Confirmation tickets for high-risk actions | Scope `scene:activate` + explicit-command check + approved-ID list + hard disable; locks/cameras/gas excluded outright | intentionally different (stricter) |
-| 9 | Per-write idempotency + audit record | Envelope `idempotencyKey`, adapter state receipts, LLM JSONL log; no durable cross-conversation receipt | partial (M2) |
-| 10 | Post-execution status readback | Not implemented on the agent path | missing (evaluate with M2) |
-| 11 | Three-layer memory (summary/preference/home semantics) | Bounded 12-message Makers history only | missing (M4) |
-| 12 | EdgeOne KV as memory sidecar | KV reserved for soft quotas; Makers store holds history | intentionally different (report's own KV caveat respected) |
-| 13 | Quota, rate limits, budget protection | `AI_QUOTA_ENABLED=false` disabled mode; no cost protection | partial (M3) |
-| 14 | Voice phases A/B/C | None | missing (deferred by design) |
-| 15 | Live deployment/verification | Makers agent routes live and auth-enforcing; Python surface unverified (§4.2) | partial (drift) |
+| 1 | Chat/orchestration shell borrowed from AI-Chat-Assistant | Console-built panel (`app/components/ai-assistant/`), cookie-auth JSON; Makers routes forward to Python. No SSE anywhere. | intentionally different |
+| 2 | One edge function for auth+memory+gateway+validation+audit | Three hops across two projects with three independently rotated secrets (`adapters/edgeone/agents/ai-home/shared.ts:34-68`). | intentionally different |
+| 3 | AI Gateway with own key, no free tier | Python `Settings` requires `AI_GATEWAY_API_KEY`/`BASE_URL`/`MODEL` with an allowlist (`src/mijia_agent/config.py:41-48`); no user keys. | implemented |
+| 4 | Device gateway wrapping Xiaomi protocol | Console has list, prop read/write, action, scene run (`app/api/xiaomi/control/route.ts:55-66`, `lib/xiaomi-scenes.ts:308`), 9 s timeouts, no retry loop. | implemented |
+| 5 | Xiaomi route decision gate | Unofficial cloud API inside the console; Home Assistant preserved as a future executor adapter (`docs/architecture.md:140`). | implemented (historic) |
+| 6 | Semantic bounded tools (`set_power`, `set_room_temperature`, `set_light`, `run_scene`) | `list_scenes`, `get_home_status`, `get_device_status`, `activate_scene` only — no per-device writes (`src/mijia_agent/command_rules.py:190-219`). | intentionally different (scene-level) |
+| 7 | Ban generic `call_api` / `set_property(did,siid,piid)` | Strict fail-closed parsing: unknown tools, extra args, invented aliases rejected (`src/mijia_agent/gateway.py:135-178`; console `lib/ai/tools/remote-tool-service.ts`). | implemented (stronger) |
+| 8 | Confirmation tickets for high-risk actions | No confirmation UX and no risk tiering: `list_scenes` exposes **every** enabled manual scene (`lib/ai/tools/agent-scene-catalog.ts:46`), and activation is unconditionally disabled rather than risk-gated. | partial |
+| 9 | Per-write idempotency + audit record | Adapter receipts in Makers `store.state` (`agents/ai-home/index.ts:3,40,55,63`) and a process-local command store with 10-min TTL (`src/mijia_agent/command_idempotency.py:40-56`); JSONL model log (`src/mijia_agent/llm_log.py`). **No durable cross-conversation claim.** | partial |
+| 10 | Post-execution status readback | None — `runManualScene` issues one POST and throws if `result !== true` (`lib/xiaomi-scenes.ts:308-319`); no re-read. | missing |
+| 11 | Three-layer memory (summary / preference / home semantics) | Only the latest 12 history messages (`agents/ai-home/index.ts:37-39`). No summary, no preference store. Home semantics exist as a rich domain model but are not exposed as memory. | missing |
+| 12 | KV as memory sidecar | KV exists only for soft quotas; Python has no storage access of any kind. | intentionally different |
+| 13 | Quota, rate limits, budget protection | Console quota stack present but the remote chat path does no local accounting; the agent implements **zero** quota code and no `/api/internal/quota`. Runs disabled. | partial |
+| 14 | Voice phases A/B/C | None. | missing |
+| 15 | Preview is read-only | `AI_ENVIRONMENT=preview` returns a fixed mock in both Python pipelines and the console (`src/mijia_agent/service.py:49-50`). | implemented |
 
-## 4. Verified drift ledger
+## 4. Verified code gaps
 
-### 4.1 `get_home_status` contract drift
+Each gap is a delta between code and the report's target, cited to source.
 
-The console `/api/ai/tools` accepts `authorize`, `list_scenes`, `get_home_status`,
-`activate_scene` on both envelopes (sessionBinding and `X-Ai-User-Token`), with
-`activate_scene` hard-disabled (`AI_SCENE_EXECUTION_DISABLED`) and `get_home_status`
-returning the sanitized snapshot from `lib/home-environment.ts` (shared with the
-dashboard read path). Inside the agent repo the two pipelines disagree: the chat
-pipeline (`service.py`/`gateway.py`/`console.py`) implements all three
-read/disabled tools, while the `/ai/command` pipeline
-(`command_console.py`/`command_service.py`) implements only `list_scenes` and
-`activate_scene` — `docs/contracts.md` and `docs/PHASE1-MANUAL-TEST.md` already
-describe this split ("read-only status rides `/internal/v1/turn`"). Slice 2 closes
-it.
+### 4.1 Two pipelines advertise different tools
 
-### 4.2 Live deployment inventory (probe evidence, 2026-09-21)
+- **Chat turn** (`service.py`) advertises `list_scenes`, `get_home_status`,
+  `get_device_status`, and — only with the `scene:activate` scope and a non-empty
+  catalog — `activate_scene` (`command_rules.py:190-219`).
+- **Command ingress** (`/ai/command`) advertises exactly one model tool:
+  `activate_scene` (`command_service.py:255`). It *preloads* scenes through a console
+  `list_scenes` call (`command_service.py:105`) but never exposes `list_scenes`,
+  `get_home_status`, or `get_device_status` to the model, and `CommandResponse` has no
+  `homeStatus`/`deviceStatus` fields (`command_models.py:68-82`).
 
-Probed `https://agent.fabloki.xyz` without credentials:
+Consequence: a Siri/Postman caller cannot ask "which lights are on" or "what's the
+temperature" — the read-only tools the report calls for simply are not on that surface.
+Workstream A.
 
-- `POST /ai-home` (with `Makers-Conversation-Id` header) →
-  `401 {"code":"AI_UNAUTHENTICATED"}`, `Server: edgeone makers`,
-  `Makers-Run-Id` echoed. The Makers agent surface is deployed and enforces auth.
-- `POST /ai-home/stop` → `401` same shape; stop route deployed.
-  `/ai-home/delete` was not probed.
-- `GET /api/healthz` → `404` plain-text "Not Found" with `Functions-Request-Id`
-  and `Eo-Pages-Inner-Scf-Status: 404`. The documented Python Cloud Function
-  health check fails at this host.
-- `GET /api/ai/command` → same 404 shape.
-- `GET /healthz` and `GET /ai/command` at the domain root → platform HTML 404
-  "The site does not exist" — a different 404 producer than `/api/*`, so root
-  paths and `/ai-home` do not share one routing origin (open question).
+### 4.2 No execution path exists
 
-Conclusion: the console README's production claim is half-true — the Makers agent
-is live, the Python Cloud Function and the `/ai/command` ingress are not verifiably
-serving. The agent repo's "no live deployment performed" matches the Python surface
-but not the Makers surface. Both documents need correction after a proper
-inventory. A further exposure: console `origin/main` (#43) retired
-`/api/ai/command` to `410 AI_COMMAND_RETIRED` and the README says command traffic
-is carried by the agent's `POST /ai/command` — which is not reachable. Whether the
-production console runs the #43 build (Siri currently has no live ingress) or a
-pre-retirement build (Siri still on the legacy route) is unknown and must be
-answered by Slice 1.
+`activate_scene` is unconditionally rejected before any device call
+(`lib/ai/tools/remote-tool-service.ts:97,197`, `AI_SCENE_EXECUTION_DISABLED`, 403). No
+receipt, ledger, execution-store, or idempotency-store module exists in the console —
+the extraction deleted the old embedded executor. The only working scene runner,
+`runManualScene`, does a single POST with **no retry, no idempotency key, and no
+post-write readback** (`lib/xiaomi-scenes.ts:308-319`). Both the report (§"每次写操作
+都要有 request_id 幂等键…回读结果") and `docs/architecture.md` require a durable
+principal/home/idempotency-key receipt before any physical action. Workstream C.
 
-### 4.3 Phase-1b user-token path and legacy retirement
+### 4.3 Scene exposure has no risk tiering
 
-Verified: the `X-Ai-User-Token` envelope is **on `origin/main`** (merged via PR
-#43, `app/api/ai/tools/route.ts` and `runUserTokenTool` in
-`remote-tool-service.ts`) — the "branch-only, unmerged" description is stale. The
-generator script also reached main via #43's squash, URL-decode fix included; the
-local branch `feat/ai-tools-user-token-path` holds no unique value beyond the
-pre-squash history and can be dropped after review. Main's generator already
-issues tokens without provider/model/apiKey fields (no-BYOK payload), but
-`lib/ai/security/automation-token.ts` still *accepts* those legacy fields
-(optionally) — Slice 7 prunes them. The user token never replaces
-`AI_TOOLS_INTERNAL_SECRET` (service bearer stays mandatory).
+`list_scenes` returns every enabled manual scene in the home as an alias
+(`lib/ai/tools/agent-scene-catalog.ts:46`). There is **no** `AI_SCENE_APPROVED_IDS`
+gate in the console code — that environment variable exists only in this repo's
+historical docs and must not be described as live. The report asks for a reviewed,
+risk-tiered exposure list and confirmation for risky actions; today the only barrier is
+that execution is switched off entirely. Workstreams A and D.
 
-The phase-3 legacy retirement is **also on console main**: `/api/ai/command`
-returns the `410 AI_COMMAND_RETIRED` stub pointing Siri at the agent's
-`POST /ai/command`. The agent repo's TODO still labels Phase 3 "prepared
-locally, gated on dev cutover" — outdated as to the console side. This raises
-the stakes on Slice 1: if production runs the main build, Siri shortcuts depend
-on an agent ingress that is not verifiably serving (§4.2).
+### 4.4 Command-pipeline error codes collapse
 
-## 5. Security boundary to preserve (non-negotiable invariants)
+`ConsoleAgentTools` accepts eleven console codes including `AI_HOME_FORBIDDEN` (403),
+`XIAOMI_SCENE_DISABLED` (400), `AI_IDEMPOTENCY_CONFLICT` (409) and
+`AI_REQUEST_IN_PROGRESS` (409) (`command_console.py:17-32`), but `COMMAND_ERROR_MAP`
+has no entry for any of them, so all four degrade to `MI_CLOUD_ERROR` 502
+(`app.py:24-40`). A caller cannot distinguish "you don't own this home" from "the cloud
+is down". Workstream B.
 
-1. Xiaomi session, `ssecurity`, QR login, principal derivation, real scene IDs,
-   DIDs: console only. Python and the adapter receive only opaque bindings/tokens.
-2. Model context contains user text, bounded history, locale/timezone, sanitized
-   scene summaries; `Result.homeStatus` values stay out of reply text and history.
-3. Tool arguments select aliases only; unknown tools/args/aliases fail closed;
-   executor status overrides model claims.
-4. Deterministic executor stays in the console; the agent never calls Xiaomi
-   directly.
-5. No generic or per-device raw MIoT tool ever enters the model tool list.
-6. EdgeOne KV is never the authoritative executor ledger (eventually consistent,
-   no CAS).
-7. Internal surfaces (`/internal/v1/turn`, `/api/ai/tools`, agent↔console) are
-   secret-authenticated server-to-server only; secrets per boundary, per
-   environment, ≥32 chars, never logged.
+### 4.5 Idempotency is not durable anywhere
 
-Every slice below must add or extend a test that fails if any invariant regresses.
+The command store is a process-local dict (`command_idempotency.py:40-56`): state is
+lost on restart and not shared across workers. Adapter receipts live in the Makers
+conversation store with no TTL and no atomic compare-and-set guarantee
+(`agents/ai-home/index.ts:3`). Neither is the durable, conversation-independent claim
+the report requires. Workstream C.
 
-## 6. Milestone mapping (report sequence ↔ M1–M4)
+### 4.6 No memory beyond raw history
 
-| Report step (§08 实施顺序) | Maps to | Status |
-|---|---|---|
-| 1. 打穿米家控制 (device gateway PoC) | Pre-M1: console device/scene control predates extraction | Done (console); M1 remote integration pending |
-| 2. 家居语义层 + idempotency/readback/audit | M1 (alias catalog, approved list) + M2 (durable receipts) | Partial |
-| 3. 接入聊天外壳 (AI-Chat-Assistant) | Superseded by the M1 extraction (console Web Chat + Makers adapter + Python) | Done (different shape) |
-| 4. 轻量记忆 (three layers) | M4 | Not started |
-| 5. 语音 PoC | Post-M4 roadmap | Not started |
+The adapter keeps the last 12 messages verbatim (`agents/ai-home/index.ts:37-39`); no
+summarisation, no preference extraction, no consent or inspect/delete surface. The
+report's three-layer memory (recent summary / user preferences / home semantics) is
+unbuilt. Home semantics do exist as a domain model (`lib/device-management.ts`,
+`lib/device-topology.ts`) and could feed the third layer without new data. Workstream F.
 
-The report introduces no competing taxonomy; its five steps map onto M1–M4 with one
-deliberate inversion: memory (report step 4) sits behind executor durability (M2)
-and quota (M3), because invisible memory without a safe executor is the worse
-failure mode. The report's memory hygiene rules (consent, inspect/delete,
-write-on-idle, versioned writes) become M4 acceptance criteria verbatim.
+### 4.7 Quota settlement is unbuilt on the agent side
 
-## 7. Implementation slices (priority order)
+The console ships a full quota stack (`lib/ai/quota/*`) but the remote chat path does no
+local accounting; when `AI_QUOTA_ENABLED=false` it synthesises a `disabled` summary
+(`lib/ai/web-chat/web-chat-service.ts:242,257-259`). The agent has no reserve/commit/release
+and no quota summary route, so enabling quota today would fail closed with 502. The
+report's "预算/限流" requirement is unmet. Workstream E.
 
-### Slice 1 — Live deployment inventory and drift closure (P0)
+### 4.8 Token payload still types BYOK fields
 
-- **Owner:** both repos (documentation + deployment, no code).
-- **Files/modules:** `docs/m1-deployment-runbook.md` verification sections (fill
-  the record), `docs/deployment.md`, console `README.md` /
-  `docs/python-agent-extraction.md` (production-address claims).
-- **Contract changes:** none.
-- **Tests:** none new; the runbook verification table is the test.
-- **Deployment gates:** determine which console build production runs (pre- or
-  post-#43); deploy the Python Cloud Function from `adapters/edgeone`
-  (`npm run build --prefix adapters/edgeone`, then the Makers deploy) or retract
-  the claim; record the `AI_AGENT_BASE_URL` actually configured in production.
-- **Rollback:** unset `AI_AGENT_BASE_URL` restores the console's same-project
-  agent route (existing rule).
-- **Acceptance:** `/api/healthz` returns `200 {"status":"ok"}` on the deployed
-  host; `/ai/command` reachable from a trusted terminal; the Siri-ingress question
-  (§4.2) has a recorded answer; both READMEs state only verified deployment facts;
-  runbook sign-off recorded.
+`AutomationTokenPayload` still declares optional `provider`/`model`/`apiKey`
+(`lib/ai/security/automation-token.ts:11-13`). Issuance rejects them
+(`app/api/ai/automation-token/route.ts:68`) and readers ignore them, so this is dead
+surface rather than a live BYOK path — but it contradicts the "no user model keys"
+invariant and should be removed. Workstream G.
 
-### Slice 2 — `get_home_status` parity on the `/ai/command` pipeline (P0)
+## 5. Invariants to preserve
 
-- **Owner:** `mijia-agent`.
-- **Files/modules:** `src/mijia_agent/command_console.py` (add `get_home_status`
-  call), `command_service.py` (decision branch, structured result),
-  `command_models.py` (additive optional `homeStatus` field on
-  `AiCommandResponse`), `command_rules.py` (reuse `chat_tools` /
-  `CHAT_TOOLS_ADDENDUM` in the command model request).
-- **Contract changes:** additive optional `homeStatus` on the command response;
-  internal tool list now matches the documented console contract — docs already
-  promise this, implementation catches up.
-- **Tests:** `tests/test_command.py` — environment question selects the read-only
-  tool; empty/partial completeness; preview rejection; values never in
-  `message`/history.
-- **Deployment gates:** follows Slice 1's `/ai/command` deployment.
-- **Rollback:** feature is additive; revert the branch.
-- **Acceptance:** Postman `{ "text": "家里温度多少" }` returns structured readings
-  (the `docs/PHASE1-MANUAL-TEST.md` "chat-only today" row flips); measurements
-  absent from reply text and stored history in every test.
+1. Xiaomi session, `ssecurity`, QR login, principal derivation, real scene IDs, DIDs —
+   webapp only. Python and the adapter receive opaque bindings/tokens only
+   (`command_console.py:1-8`).
+2. Structured readings/device states never enter model messages, replies, or history
+   (`service.py:73-74,99-101`).
+3. Tool arguments select aliases only; unknown tools/args/aliases fail closed; executor
+   status overrides model text (`gateway.py:135-178`).
+4. The deterministic executor stays in the webapp; the agent never calls Xiaomi.
+5. No generic or per-device raw MIoT tool enters the model tool list.
+6. EdgeOne KV is never an authoritative ledger (eventually consistent, no CAS).
+7. Internal surfaces are secret-authenticated server-to-server only; secrets per
+   boundary and environment, ≥32 chars, never logged (`config.py:34-40`).
 
-### Slice 3 — Complete M1 read-only integration (P0.5)
+Each workstream must add or extend a test that fails if its invariant regresses.
 
-- **Owner:** both repos.
-- **Files/modules:** runbook deployment sections; console env `AI_AGENT_BASE_URL`,
-  `AI_QUOTA_ENABLED=false`; `adapters/edgeone` deployment.
-- **Contract changes:** none (M1 is frozen-contract verification).
-- **Tests:** existing `tests/ai-web-chat.test.mjs`, `ai-remote-tools.test.mjs`,
-  agent `tests/test_agent.py`, `adapters/edgeone/tests/adapter.test.mjs`.
-- **Deployment gates:** runbook exit criteria — A/B principal isolation, stop
-  propagation during an in-flight Gateway call (499 `AI_AGENT_CANCELLED`),
-  Gateway model verified from the deployed Cloud Function, preview mock,
-  disabled-quota summary with no ledger access.
-- **Rollback:** unset `AI_AGENT_BASE_URL`; one active backend; never retry an
-  uncertain receipt on either backend.
-- **Acceptance:** every runbook verification row recorded with evidence; zero
-  device actions; no credential/DID/secret in responses or logs.
+## 6. Workstreams
 
-### Slice 4 — M2 durable executor (P1, blocks all physical activation)
+Ordered by correctness risk before feature growth. Each states current code → target
+delta → files → tests → acceptance.
 
-- **Owner:** `mijia-web-console` (executor + receipt store); `mijia-agent`
-  consumes unchanged.
-- **Files/modules:** new durable receipt store module in the console (name TBD at
-  the design gate), the `activate_scene` branch of `/api/ai/tools`, wiring through
-  existing `runManualScene` (`lib/xiaomi-scenes.ts`), new env gate (e.g.
-  `AI_SCENE_EXECUTION_ENABLED`); tests in `tests/ai-remote-tools.test.mjs` plus a
-  new executor test file.
-- **Contract changes:** `activate_scene` flips from unconditional
-  `AI_SCENE_EXECUTION_DISABLED` to executed-or-uncertain semantics behind the env
-  gate; error codes (`AI_EXECUTION_STATUS_UNKNOWN`, `AI_IDEMPOTENCY_CONFLICT`,
-  `AI_REQUEST_IN_PROGRESS`) are already mapped on both sides.
-- **Design gate (explicit, do not pre-decide):** choose a durable store with
-  atomic create/compare-and-set scoped `env + principal + home + idempotency key`,
-  independent of conversation. EdgeOne KV is disqualified by the report's and the
-  architecture doc's own consistency argument. The receipt must record canonical
-  request hash, scene revision, processing/result/uncertain state, timestamps —
-  this is the report's per-write audit record; no tokens or credentials in it.
-  Evaluate bounded post-execution readback (report recommendation) as part of this
-  design, not as a separate commitment.
-- **Tests:** duplicate keys across conversations, workers, restarts; scene edited
-  after approval; partial results; client disconnect; cancellation/timeout after
-  dispatch; settlement failure after execution must not trigger a second action.
-- **Deployment gates:** gate env off by default; enable only after the test matrix
-  is green and `AI_SCENE_APPROVED_IDS` is reviewed; one real low-risk scene E2E
-  last.
-- **Rollback:** unset the gate env and redeploy (restores hard disable); never
-  blind-retry uncertain receipts — inspect the receipt first (existing rule).
-- **Acceptance:** exactly one durable claim per logical command; replays return
-  the stored result; uncertain outcomes remain visible with explicit
-  reconciliation; no false success; deleting conversation memory never deletes
-  receipts.
+### Workstream A — Tool-surface parity and scene exposure policy
 
-### Slice 5 — M3 quota, state, and cutover (P1)
+- **Current:** command ingress advertises only `activate_scene`; `list_scenes` exposes
+  all enabled scenes with no tiering (§4.1, §4.3).
+- **Target delta:** decide and implement the read-only tool set for `/ai/command`
+  (reuse `chat_tools()` from `command_rules.py` so both pipelines share one definition),
+  add `homeStatus`/`deviceStatus` to `CommandResponse`, and decide whether `list_scenes`
+  keeps exposing every enabled scene or gains a reviewed/risk-tiered list.
+- **Files:** `src/mijia_agent/command_service.py`, `command_models.py`,
+  `command_rules.py`, `command_console.py`; console
+  `lib/ai/tools/agent-scene-catalog.ts`.
+- **Tests:** `tests/test_command.py` — an environment/device question selects the
+  read-only tool; values stay out of `message` and history; a disabled or unreadable
+  device reports `unknown`, never a guess.
+- **Acceptance:** both pipelines advertise the same read-only tools; `{ "text": "家里温度多少" }`
+  returns structured readings; the exposure policy is written down and enforced by a test.
 
-- **Owner:** `mijia-agent` (adapter settlement) + `mijia-web-console` (policy
-  surface).
-- **Files/modules:** `adapters/edgeone/agents/` — reserve before the Python call,
-  commit known usage on success/finalized error, conservative estimate on unknown
-  transport outcomes, release on pre-flight errors; new authenticated
-  `POST /api/internal/quota`; console `lib/ai/web-chat/` quota pass-through and
-  `lib/ai/quota/` KV binding.
-- **Contract changes:** activate the already-documented M3 contract: every
-  successful chat carries a valid quota summary; adapter serves the quota summary
-  route.
-- **Tests:** adapter settlement-category tests; console quota API tests in enabled
-  mode; 429 recovery; A/B isolation; propagation/overrun measurement on real KV.
-- **Deployment gates:** `AI_QUOTA_ENABLED=true` only after the deployed adapter
-  passes settlement checks; WAF/minute burst limits configured; never a second
-  console ledger in remote mode.
-- **Rollback:** set `AI_QUOTA_ENABLED=false` (disabled mode has no ledger to
-  reset); restore local route only with a verified KV config.
-- **Acceptance:** every successful chat carries a valid summary; soft-limit
-  overrun measured and documented; bounded receipt retention and conversation TTL
-  implemented; unresolved physical outcomes never silently expired.
+### Workstream B — Command-pipeline error fidelity
 
-### Slice 6 — M4 three-layer memory with consent/inspect/delete (P2)
+- **Current:** four console codes collapse to `MI_CLOUD_ERROR` 502 (§4.4).
+- **Target delta:** add stable entries to `COMMAND_ERROR_MAP` (e.g.
+  `AI_HOME_FORBIDDEN` 403, `XIAOMI_SCENE_DISABLED` 400, and the two 409s) so callers can
+  distinguish authorisation from infrastructure failure.
+- **Files:** `src/mijia_agent/app.py:24-40`.
+- **Tests:** `tests/test_command.py` — each console code surfaces as its own public code.
+- **Acceptance:** no console error degrades to a generic 502 except genuinely unknown ones.
 
-- **Owner:** `mijia-agent` (summary layer, adapter store) + `mijia-web-console`
-  (identity, consent and inspect/delete UI, home-semantics projection).
-- **Files/modules:** adapter summary roll in `adapters/edgeone/agents/ai-home/`;
-  new preference store + console routes (e.g. `/api/ai/memory`) and settings UI;
-  home-entity semantics derived from the existing alias catalog
-  (`lib/ai/tools/agent-scene-catalog.ts`) and injected as context, never
-  hand-configured model-visible data.
-- **Contract changes:** new internal memory endpoints and public inspect/delete
-  routes; additive `Result` context fields.
-- **Storage decision (explicit gate, mirror of M2):** recent-turn summary may live
-  where eventual consistency is tolerable (Makers store); preferences and home
-  semantics need durability plus reliable delete — the same store criteria as M2,
-  not the quota KV.
-- **Consent model (from the report, verbatim):** preferences write only on
-  explicit user statements or task completion with consent; batched writes with
-  version/content-hash dedup; habit evidence yields suggestions, never execution
-  authority; household scopes separated.
-- **Tests:** delete removes all three layers while receipts survive; no
-  token/DID/real scene ID in any memory record; summary bounded and versioned;
-  consent-gated writes.
-- **Rollback:** memory off via env; deletion routes always available.
-- **Acceptance:** a user can view, edit, and delete everything remembered about
-  them from the console; conversation beyond 12 messages survives as summary, not
-  raw text; zero un-consented preference writes in tests.
+### Workstream C — Durable execution ledger (blocks all activation)
 
-### Slice 7 — Automation-token convergence (P2)
+- **Current:** activation hard-disabled; `runManualScene` has no retry, idempotency, or
+  readback; no durable store on either side (§4.2, §4.5).
+- **Target delta:** a durable store with atomic create/compare-and-set keyed
+  `env + principal + home + idempotencyKey`, independent of conversation, holding the
+  canonical request hash, scene revision, state (`processing`/`result`/`uncertain`) and
+  timestamps; wire `runManualScene` behind an off-by-default env gate; add bounded
+  post-execution readback; never retry an `uncertain` outcome blindly. EdgeOne KV is
+  disqualified (eventual consistency, no CAS).
+- **Files:** new console store module, `lib/ai/tools/remote-tool-service.ts`,
+  `lib/xiaomi-scenes.ts`, `app/api/ai/tools/route.ts`.
+- **Tests:** duplicate keys across conversations/workers/restarts; scene edited after
+  approval; partial result; client disconnect; timeout after dispatch; settlement
+  failure cannot trigger a second action.
+- **Acceptance:** exactly one durable claim per logical command; replays return the
+  stored result; `uncertain` stays visible with explicit reconciliation; deleting
+  conversation memory never deletes receipts.
 
-- **Owner:** `mijia-web-console`, with the agent repo for ingress parity.
-- **Files/modules:** `lib/ai/security/automation-token.ts` (drop the legacy
-  optional `provider/model/apiKey` payload fields — main's generator already
-  issues session-only tokens); drop the local `feat/ai-tools-user-token-path`
-  branch after confirming nothing unique remains; tests
-  `ai-automation-token*.test.mjs`.
-- **Contract changes:** token payload becomes session + optional bound home only;
-  the `/api/ai/tools` user-token path is unchanged otherwise.
-- **Decision (deferred to cutover, criteria fixed now):** Siri enters either
-  directly via the agent's `POST /ai/command` or via a thin console proxy — decide
-  once `/ai/command` is deployed (Slice 1) and quota (Slice 5) is settled; record
-  the decision in both contracts docs.
-- **Acceptance:** token roundtrip green with session-only payload; main passes
-  the full console suite; Siri path documented and live.
+### Workstream D — Risky-action confirmation UX
 
-### Slice 8 — Voice entry criteria (P3, do not start earlier)
+- **Current:** no confirmation surface; the panel always sends an idempotency key, which
+  is what grants `scene:activate` scope (`lib/ai/web-chat/web-chat-service.ts:230-232`).
+- **Target delta:** a parameters-bound, short-expiry confirmation step for the high-risk
+  categories the report names (locks, cameras, gas/heating, bulk power-off, actions
+  while nobody is home), shown before an activation is dispatched.
+- **Files:** `app/components/ai-assistant/*`, a confirmation token module, the console
+  tool facade.
+- **Tests:** confirmation binds to the exact params and action; expiry is enforced;
+  a mismatched or expired confirmation cannot execute.
+- **Acceptance:** no high-risk activation dispatches without a matching live confirmation;
+  low-risk scenes stay one-step.
 
-Preconditions, all mandatory: M2 and M3 verified in production, memory consent
-shipped (Slice 6), and a measured text-path latency baseline (the report's warning
-holds: wake, VAD, ASR first-word, LLM first-token, tool execution, and TTS
-first-packet all sit on the critical path). Phase A only — browser-recorded clip →
-ASR → existing text agent → TTS — before any streaming/WebSocket/WebRTC gateway,
-and before evaluating 小爱音箱/xiaogpt reuse or a local satellite. EdgeOne Functions
-host orchestration only, never ASR/TTS inference.
+### Workstream E — Quota settlement end to end
 
-## 8. Non-goals and decisions not to make prematurely
+- **Current:** console quota stack idle; agent has no quota code (§4.7).
+- **Target delta:** adapter-owned reserve/commit/release with known-usage,
+  unknown-outcome, and pre-flight categories; a principal-bound summary on every success;
+  an authenticated `POST /api/internal/quota` summary route; then flip
+  `AI_QUOTA_ENABLED=true` (never run a second console ledger in remote mode).
+- **Files:** `adapters/edgeone/agents/*`; console `lib/ai/web-chat/*`, `lib/ai/quota/*`.
+- **Tests:** settlement categories; 429 recovery; A/B isolation; propagation/overrun on
+  real KV, retaining `softLimit: true`.
+- **Acceptance:** every successful chat carries a valid summary; overrun is measured and
+  documented; production stays fail-closed when the store is unavailable.
 
-- **No vector database or embeddings now.** The report's MVP answer (three small
-  layers) is the plan; revisit only after M4 shows the summary layer failing.
-- **No generic raw MIoT tools** (`call_api`, `set_property(did,siid,piid)`) —
-  permanent; both repos' fail-closed tests guard it.
-- **No per-device control tools** (`set_power`, `set_room_temperature`,
-  `set_light`) until scene-level execution is durably safe (M2 done) and a
-  confirmation flow is designed; the current state being narrower than the report
-  proposed is a feature.
-- **No voice before the text path is safe** (Slice 8 preconditions).
-- **No EdgeOne KV as the atomic executor ledger** — permanent; also not for
-  preferences needing reliable delete.
-- **No SSE/streaming chat now.** The JSON contract is frozen through M3; streaming
-  is a post-cutover decision with its own latency evidence.
-- **No BYOK return; no user model keys.** Model access stays with the
-  console-configured Makers Gateway; token provider fields are removed, not
-  honored.
-- **No second console quota ledger in remote mode; no dual writers for the command
-  namespace.**
-- **No Home Assistant executor adapter now** (preserved future decision).
-- **Do not choose the durable store or the memory store before their design
-  gates** (Slices 4 and 6) — candidates are evaluated against the
-  atomicity/delete criteria, not picked by default.
+### Workstream F — Three-layer memory with consent
 
-## 9. Open questions
+- **Current:** 12-message history only (§4.6).
+- **Target delta:** recent-turn summary (bounded, versioned), consent-gated preferences
+  with inspect/edit/delete, and home semantics projected from the existing device model.
+  Preferences need durability plus reliable delete — the same store criteria as
+  Workstream C, not the quota KV.
+- **Files:** `adapters/edgeone/agents/ai-home/*`; console memory routes + settings UI;
+  `lib/device-management.ts` as the semantics source.
+- **Tests:** delete clears all three layers while receipts survive; no token/DID/real
+  scene ID in any record; summary is bounded and versioned; no un-consented writes.
+- **Acceptance:** a user can view, edit, and delete everything remembered about them;
+  conversation beyond 12 messages survives as a summary, not raw text.
 
-1. Does the production console run the main build with the #43 retirement stub —
-   and if so, what do Siri shortcuts receive today (a 410 pointing at an
-   unreachable agent ingress, or a still-working legacy route)? (Slice 1)
-2. Why do `/api/*` and root paths at `agent.fabloki.xyz` produce different 404s —
-   stale Cloud Function build, missing build, or misrouted prefix? (Slice 1)
-3. Real Makers store atomicity/serialization and delete semantics on the deployed
-   runtime (M3 TODO) — the process-local `active` set is explicitly not a
-   distributed claim.
-4. Makers scheduler API reality for reminders (M4) — verify, do not infer from
-   use-case docs.
-5. Whether scene-level post-execution readback is meaningful for `activate_scene`
-   responses, or only for a future per-device tool family (Slice 4 design gate).
+### Workstream G — Token payload hygiene
+
+- **Current:** `AutomationTokenPayload` still types optional BYOK fields (§4.8).
+- **Target delta:** drop `provider`/`model`/`apiKey` from the type once no consumer reads
+  them; keep the token a session + optional-bound-home credential.
+- **Files:** `lib/ai/security/automation-token.ts`, `scripts/generate-automation-token.ts`,
+  token tests.
+- **Acceptance:** token round-trip passes with a session-only payload; no BYOK field is
+  accepted or emitted anywhere.
+
+### Workstream H — Voice entry criteria
+
+Preconditions, all mandatory before any voice work: Workstreams C and E shipped and
+verified, Workstream F consent shipped, and a measured text-path latency baseline (the
+report's warning holds: wake, VAD, ASR first-word, LLM first-token, tool execution, and
+TTS first-packet all sit on the critical path). Then Phase A only — browser-recorded clip
+→ ASR → the existing text agent → TTS — before any streaming/WebSocket/WebRTC gateway or
+satellite. EdgeOne functions host orchestration only, never ASR/TTS inference.
+
+## 7. Non-goals
+
+- **No vector database or embeddings now.** The report's MVP answer (three small layers)
+  is the plan; revisit only if the summary layer demonstrably fails.
+- **No generic raw MIoT tools** (`call_api`, `set_property(did,siid,piid)`) — permanent.
+- **No per-device control tools** (`set_power`, `set_room_temperature`, `set_light`) until
+  Workstream C is done; the current scene-level surface is a feature, not a gap.
+- **No voice before the text path is safe** (Workstream H preconditions).
+- **No EdgeOne KV as the executor ledger or the preference store.**
+- **No SSE/streaming chat now** — the JSON contract holds until execution and quota are
+  settled.
+- **No BYOK return; no user model keys.**
+- **No second console quota ledger in remote mode; no dual writers for the command namespace.**
+- **No Home Assistant executor adapter yet.**
+
+## 8. Open questions
+
+1. Does the Makers conversation store give atomic create/compare-and-set, or must the
+   execution ledger live elsewhere? (Workstream C design.)
+2. Is scene-level post-execution readback meaningful, or only useful once per-device
+   tools exist? (Workstream C.)
+3. Should `/ai/command` adopt the full read-only tool set, or stay action-only by design
+   as the Siri ingress? (Workstream A.)
+4. Which scene categories count as high-risk enough to require confirmation, given the
+   console has no risk metadata today? (Workstream D.)

@@ -15,7 +15,6 @@
 | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_MODEL` | Retire after cutover | Not needed | Yes |
 | `AI_GATEWAY_ALLOWED_MODELS` | — | — | Optional; defaults to configured model only |
 | `AI_GATEWAY_TIMEOUT_MS` / `AI_GATEWAY_MAX_OUTPUT_TOKENS` | — | — | Defaults 5000 / 256 |
-| `AI_SCENE_APPROVED_IDS` | Yes | No | No |
 | `AI_ENVIRONMENT` | Set preview checks | development/preview/production | Required policy; default production |
 
 Use distinct secrets across service boundaries and environments. Python validates the
@@ -51,7 +50,8 @@ the [M1 deployment runbook](./m1-deployment-runbook.md).
    development cutover, also set console `AI_QUOTA_ENABLED=false`: the console synthesizes
    disabled quota summaries and requires no adapter quota surface. Do not claim cost
    protection in this mode.
-7. Complete execution/state/quota gates in TODO.md before any production cutover.
+7. Complete the durable-execution and quota workstreams in
+   [steward-report-alignment.md](./steward-report-alignment.md) before any production cutover.
 
 ## EdgeOne Cloud Functions
 
@@ -75,8 +75,7 @@ auxiliary package as `api.mijia_agent`.
 The project's prior contract used `agents.framework=openai-agents-sdk`, `dir=agents`,
 `timeout=60`, file routes and the `Makers-Conversation-Id` header. The standalone adapter
 config carries that baseline forward. The EdgeOne Cloud Functions file routing, ASGI
-entry, dependency merging, and build exclusions follow Tencent's current documentation,
-but no live project deployment or function invocation has been performed.
+entry, dependency merging, and build exclusions follow Tencent's current documentation.
 
 ## Rollback
 

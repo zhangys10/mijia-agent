@@ -4,20 +4,23 @@ Python agent development extracted from `zhangys10/mijia-web-console`.
 This repository owns model integration, intent handling, controlled tool calls,
 and future reminder/preference features. Xiaomi protocol code stays in the web console.
 
-**Status: tested initial extraction, not a production cutover.** The Python core,
-Makers adapter, CI, and companion web-console patch are present. The new console
-tool boundary supports authorization and scene discovery. Remote physical execution
-is deliberately disabled until durable executor idempotency is implemented.
-No live deployment, model invocation, or device control was performed during extraction.
+**Status: extracted Python agent, running as a two-project deployment.** The Python
+core, Makers adapter, CI, and companion web-console changes are present. The console
+tool boundary serves authorization, scene discovery, and the read-only
+`get_home_status`/`get_device_status` tools; the `/ai/command` ingress serves the
+automation-token path. Remote physical execution is deliberately disabled until a
+durable executor claim exists. See
+[steward-report-alignment.md](docs/steward-report-alignment.md) for the code-cited
+gap list.
 
 ## Read first
 
 1. [Architecture and decisions](docs/architecture.md)
 2. [Migration audit and provenance](docs/migration.md)
 3. [Service contracts](docs/contracts.md)
-4. [Implementation backlog](docs/TODO.md)
+4. [Steward report alignment](docs/steward-report-alignment.md)
 5. [Deployment and rollback](docs/deployment.md)
-6. [Steward report alignment](docs/steward-report-alignment.md)
+6. [Historical backlog](docs/TODO.md) — not maintained
 
 The three original AI design documents are preserved in `docs/source-snapshot/`.
 They describe the TypeScript baseline; the documents above supersede their repo
@@ -66,8 +69,7 @@ syncs `src/mijia_agent` into the Cloud Functions build tree; deploy with the Edg
 Makers project rooted at `adapters/edgeone`. That root contains both platform markers:
 `edgeone.json` plus `agents/` for Agent routes, and `cloud-functions/` for Python.
 The Cloud Function is exposed as `/api`, and EdgeOne strips that prefix before invoking
-the existing FastAPI routes. Its runtime APIs and Cloud Functions build behavior still
-need live verification.
+the existing FastAPI routes.
 Python remains unable to access EdgeOne KV.
 
 ## Layout

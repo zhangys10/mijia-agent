@@ -53,8 +53,9 @@ credential forwarding, no automatic tool retries, and conservative uncertain rec
 
 This is a staged migration: production traffic is not switched; source code is not
 deleted; the extracted console API is read-only. A tested Python execution protocol
-is not equivalent to live physical execution parity. Full cutover requires the gates
-in TODO.md and both repositories' deployment checks.
+is not equivalent to live physical execution parity. Full cutover requires the gates in
+[steward-report-alignment.md](steward-report-alignment.md) and both repositories'
+deployment checks.
 
 The source `AI_SCENE_APPROVED_IDS` catalog treats a listed scene as low risk; it does
 not bind approval to the scene's current action revision. Implement reviewed revision

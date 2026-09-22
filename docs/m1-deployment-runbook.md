@@ -40,7 +40,6 @@ and rollback owner in the sign-off section. Never copy secret values into this d
 | `AI_PYTHON_INTERNAL_SECRET` | — | Sends | Verifies |
 | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_MODEL` | Retire after cutover | — | Set explicitly |
 | `AI_GATEWAY_ALLOWED_MODELS`, timeout/output limits | — | — | Optional policy |
-| `AI_SCENE_APPROVED_IDS` | Set to the reviewed read-only catalog | — | — |
 | `AI_ENVIRONMENT` | Set | Set | Set; do not rely on the production default |
 
 Use distinct high-entropy secrets for each boundary and environment. Values stay in the
@@ -56,8 +55,9 @@ missing. Recheck names without printing values before deployment because this st
 
 1. Deploy the console branch containing `POST /api/ai/tools` to development.
 2. Keep `AI_AGENT_BASE_URL` unset so the public chat path remains on its existing backend.
-3. Configure `AI_TOOLS_INTERNAL_SECRET`, the session/principal secrets, and an empty or
-   read-only `AI_SCENE_APPROVED_IDS` list.
+3. Configure `AI_TOOLS_INTERNAL_SECRET` and the session/principal secrets. There is no
+   scene allowlist to set: `/api/ai/tools` `list_scenes` exposes every enabled manual
+   scene in the home as an alias, and `activate_scene` is unconditionally disabled.
 4. From a trusted terminal, call `authorize` and `list_scenes` using a freshly minted internal
    binding. Do not save the request body.
 5. Verify missing/wrong Bearer credentials return 401, a foreign home returns 403, and the

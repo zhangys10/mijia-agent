@@ -21,7 +21,7 @@ authorization and discovery only; activation returns `AI_SCENE_EXECUTION_DISABLE
 |---|---|---|
 | QR login, encrypted Xiaomi Cookie, raw Xiaomi user ID | Web console | Existing trusted credential boundary |
 | Stable HMAC principal, home ownership, browser conversation handle | Web console | Never trust caller-supplied identity |
-| Quota policy and reserve/commit/release | Web console Edge Functions | KV binding exists there; preserve one shared web/Siri ledger. Implementation is deferred (M3): remote mode runs with quota disabled and no ledger |
+| Quota policy and reserve/commit/release | Makers adapter (settlement), console (policy surface) | KV binding exists in the console; one shared ledger. Not implemented: remote mode runs with quota disabled and no ledger on either side |
 | Gateway provider, intent selection, safe tool validation | Python | Agent development belongs in the new repo |
 | Conversation messages, lifecycle, platform cancellation | New repo Makers adapter | Preserve existing platform storage/runtime semantics |
 | Python HTTP hosting | EdgeOne Cloud Functions (`cloud-functions/api`) | Deploy the ASGI boundary with the Makers project |
