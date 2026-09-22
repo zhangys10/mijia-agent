@@ -49,8 +49,9 @@ class Settings:
         endpoint(self.console_url, self.environment == "development")
 
     @classmethod
-    def from_env(cls):
-        env = os.environ
+    def from_env(cls, env=None):
+        """Build settings from a ``os.environ``-like mapping (default: the process env)."""
+        env = os.environ if env is None else env
         model = env.get("AI_GATEWAY_MODEL", "")
         return cls(
             internal_secret=env.get("AI_PYTHON_INTERNAL_SECRET", ""),
