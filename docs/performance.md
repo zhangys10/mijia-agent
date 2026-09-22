@@ -306,5 +306,3 @@ warm percentiles separate.
   behavior.
 - Confirm scene responses, home-status sanitization, receipt replay, history isolation, and
   preview behavior remain unchanged.
-- Do not run real physical activation until the existing durable executor M2 gate (see
-  [TODO.md](TODO.md)) is complete; no performance change is allowed to bypass it.
