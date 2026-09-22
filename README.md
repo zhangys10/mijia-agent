@@ -13,11 +13,9 @@ No live deployment, model invocation, or device control was performed during ext
 ## Read first
 
 1. [Architecture and decisions](docs/architecture.md)
-2. [Migration audit and provenance](docs/migration.md)
-3. [Service contracts](docs/contracts.md)
-4. [Implementation backlog](docs/TODO.md)
-5. [Deployment and rollback](docs/deployment.md)
-6. [Steward report alignment](docs/steward-report-alignment.md)
+2. [Service contracts](docs/contracts.md)
+3. [Deployment and rollback](docs/deployment.md)
+4. [Steward report alignment](docs/steward-report-alignment.md)
 
 The three original AI design documents are preserved in `docs/source-snapshot/`.
 They describe the TypeScript baseline; the documents above supersede their repo
@@ -72,7 +70,7 @@ mijia-agent-local-prod run --message '我还没回家'
 ```
 
 The CLI starts the real ASGI app on loopback and shuts it down on exit. See
-[the live test guide](docs/PHASE1-MANUAL-TEST.md) for cookie/token files, retained logs,
+[the live test guide](docs/local-prod-test.md) for cookie/token files, retained logs,
 expected execution-gate behavior, and operational warnings.
 
 ## EdgeOne adapter
