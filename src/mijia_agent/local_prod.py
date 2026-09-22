@@ -296,6 +296,10 @@ def generate_token(
                 env={
                     "PATH": os.environ.get("PATH", os.defpath),
                     "HOME": os.environ.get("HOME", ""),
+                    # The token's AES-GCM AAD binds the environment name; the
+                    # production console resolves APP_ENV || NODE_ENV, so the
+                    # generator must seal with the same env or verification fails.
+                    "NODE_ENV": "production",
                 },
                 cwd=str(console_repo),
                 stdin=subprocess.DEVNULL,
@@ -454,9 +458,11 @@ def send_command(
             f"Request is still processing (Idempotency-Key: {key}); the result is unknown"
         )
     if response.status_code >= 500:
+        code = body.get("code")
+        detail = f", code: {code}" if isinstance(code, str) and code else ""
         raise CliError(
-            f"Agent failed after dispatch (HTTP {response.status_code}, Idempotency-Key: {key}); "
-            "the result is unknown"
+            f"Agent failed after dispatch (HTTP {response.status_code}{detail}, "
+            f"Idempotency-Key: {key}); the result is unknown"
         )
     if response.status_code >= 400 and not isinstance(body.get("code"), str):
         raise CliError(f"Agent returned an invalid error (HTTP {response.status_code})")

@@ -241,9 +241,10 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     assert not session_file.exists()  # cookie temp file removed
     assert "pasted-cookie-value" not in " ".join(command)
     # The console script auto-reads its own .env for the secrets; the agent's
-    # child env must carry nothing sensitive at all.
+    # child env must carry nothing sensitive, only the env binding + basics.
     child_env = captured["env"]
-    assert set(child_env) <= {"PATH", "HOME"}
+    assert set(child_env) <= {"PATH", "HOME", "NODE_ENV"}
+    assert child_env["NODE_ENV"] == "production"
     assert "AI_AUTOMATION_TOKEN_SECRET" not in child_env
     assert "XIAOMI_SESSION_SECRET" not in child_env
 
@@ -478,7 +479,9 @@ def test_send_command_treats_server_error_as_post_dispatch_failure():
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
-        pytest.raises(local_prod.CliError, match="failed after dispatch.*unknown"),
+        pytest.raises(
+            local_prod.CliError, match=r"failed after dispatch \(HTTP 502, code: MI_CLOUD_ERROR"
+        ),
     ):
         local_prod.send_command(client, "http://local", "secret-token", "one", None, [], None)
 
