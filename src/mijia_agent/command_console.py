@@ -45,6 +45,13 @@ class ConsoleAgentTools:
         arguments: dict,
         idempotency_key: str | None = None,
     ) -> dict:
+        # The console rejects an explicit null home (it validates any present
+        # value as a string), so the key is omitted entirely when unset.
+        body: dict = {"requestId": request_id, "tool": tool, "arguments": arguments}
+        if home is not None:
+            body["home"] = home
+        if idempotency_key is not None:
+            body["idempotencyKey"] = idempotency_key
         try:
             response = await self.client.post(
                 self.settings.console_url.rstrip("/") + "/api/ai/tools",
@@ -52,13 +59,7 @@ class ConsoleAgentTools:
                     "Authorization": "Bearer " + self.settings.tools_secret,
                     "X-Ai-User-Token": user_token,
                 },
-                json={
-                    "requestId": request_id,
-                    "home": home,
-                    "tool": tool,
-                    "arguments": arguments,
-                    "idempotencyKey": idempotency_key,
-                },
+                json=body,
                 timeout=15,
                 follow_redirects=False,
             )

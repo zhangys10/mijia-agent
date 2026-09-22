@@ -472,7 +472,6 @@ def test_console_agent_tools_sends_token_header_and_home_field():
         "home": "我的家",
         "tool": "list_scenes",
         "arguments": {},
-        "idempotencyKey": None,
     }
 
 
