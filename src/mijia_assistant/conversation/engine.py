@@ -191,6 +191,7 @@ class ConversationEngine:
                         ctx, events, usage, client_data, "TOOL_FAILED", call.name
                     )
                 events.append(ToolEvent(name=call.name, status=result.status))
+                self._log_tool_result(call.name, result.status)
                 if result.client_data is not None:
                     client_data = result.client_data
                 if result.display_text:
@@ -244,7 +245,6 @@ class ConversationEngine:
             self.tool_result_logger(tool_name=tool_name, status=status, error_code=error_code)
         except Exception:  # noqa: BLE001 -- logging must never fail a turn.
             return
-
     @staticmethod
     def _tool_error_response(
         ctx: AssistantContext,
