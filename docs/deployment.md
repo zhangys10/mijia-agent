@@ -16,6 +16,9 @@
 | `AI_GATEWAY_ALLOWED_MODELS` | — | — | Optional; defaults to configured model only |
 | `AI_GATEWAY_TIMEOUT_MS` / `AI_GATEWAY_MAX_OUTPUT_TOKENS` | — | — | Legacy-router defaults 5000 / 256 |
 | `AI_ASSISTANT_MAX_OUTPUT_TOKENS` | — | — | Canonical assistant completion limit; defaults 512 |
+| `AI_CAIYUN_BASE_URL`, `AI_CAIYUN_APP_KEY`, `AI_CAIYUN_APP_SECRET` | — | — | Required together to enable Caiyun Weather v2.6’s signed App Key/App Secret mode; no token auth or provider fallback |
+| `AI_AMAP_BASE_URL`, `AI_AMAP_API_KEY`, `AI_AMAP_PRIVATE_KEY` | — | — | Required together with Caiyun to resolve mainland-China city and district names; the private key is used only server-side to generate AMap `sig` |
+| `AI_WEATHER_TIMEOUT_MS`, `AI_WEATHER_CACHE_TTL_SECONDS` | — | — | Defaults 3000 ms and 300 seconds; values are bounded to 100–3000 ms and 60–600 seconds |
 | `AI_SCENE_APPROVED_IDS` | Yes | No | No |
 | `AI_ENVIRONMENT` | Set preview checks | development/preview/production | Required policy; default production |
 

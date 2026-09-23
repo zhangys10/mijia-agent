@@ -273,34 +273,28 @@ The system prompt defines a helpful general assistant, not an intent router. The
 
 ### 8.2 Weather capability
 
-**Decision:** use [Open-Meteo](https://open-meteo.com/) as the Phase 1 native weather provider. Use its hosted commercial endpoint in production; keep self-hosting as an exit path, not the initial deployment.
+**Decision:** use [Caiyun Weather v2.6](https://docs.caiyunapp.com/weather-api/v2/v2.6/6-weather.html) as the Phase 1 native weather provider. The MVP is mainland China only.
 
 Why it fits:
 
 | Concern | Assessment |
 |---|---|
-| China coverage | Global forecast coverage plus a dedicated [CMA GRAPES API](https://open-meteo.com/en/docs/cma-api); the general forecast endpoint automatically selects applicable models |
-| Singapore coverage | Global 9–11 km models cover Singapore and are sufficient for city-level current conditions and forecasts; short-lived tropical convection will be less precise than Singapore's local nowcast |
-| Open source and licensing | Server is AGPLv3; served data is CC BY 4.0 with attribution. The hosted free endpoint is limited to non-commercial use and 10,000 calls/day, so it is not the production plan |
-| Production service | Commercial plans provide a dedicated endpoint, API key, higher limits, priority support, and a stated 99.9% uptime target |
-| Latency | No regional latency SLA is published. Accept only after an EdgeOne deployment probe demonstrates p95 ≤ 1.5 seconds and p99 ≤ 3 seconds from the intended China/Singapore execution paths |
-| Alerts | Open-Meteo provides forecast weather codes, not an authoritative China/Singapore public-warning contract. Phase 1 reports alerts as unsupported and never converts forecast thresholds into official warnings |
+| China coverage | Caiyun’s v2.6 weather endpoint is selected for this China-only MVP and accepts a longitude/latitude target |
+| Data | One combined request returns realtime and daily weather; realtime is published on a minute cadence, while daily forecasts are batch-published |
+| Authentication | Use Caiyun’s recommended signed App Key/App Secret mode: a per-request HMAC signature, nonce, and timestamp. The App Secret stays server-only and neither credential enters model context, client responses, or logs |
+| Latency | Accept only after an EdgeOne deployment probe demonstrates p95 ≤ 1.5 seconds and p99 ≤ 3 seconds from intended China execution paths |
+| Alerts | The API can return alerts only when explicitly requested with an entitled token. Phase 1 sends `alert=false` and returns `alertsSupported: false` until alert policy is designed |
 
-References: [forecast API](https://open-meteo.com/en/docs), [features and global coverage](https://open-meteo.com/en/features), [pricing](https://open-meteo.com/en/pricing), and [source](https://github.com/open-meteo/open-meteo).
+References: [combined weather endpoint](https://docs.caiyunapp.com/weather-api/v2/v2.6/6-weather.html), [realtime fields](https://docs.caiyunapp.com/weather-api/v2/v2.6/1-realtime.html), and [daily fields](https://docs.caiyunapp.com/weather-api/v2/v2.6/4-daily.html).
 
-Alternatives considered:
+The adapter caches normalized results for five minutes by resolved place, language, and forecast window. Use a three-second provider deadline with no automatic retry. The server resolves a user-supplied China city or area name with AMap, then sends only its coordinates to Caiyun; coordinates are never requested from or shown to users. Lookup failures receive a generic retry-later response. A forecast remains useful when alerts are unavailable, but the result must explicitly contain `alertsSupported: false`.
 
-| Provider | Result |
-|---|---|
-| [MET Norway Locationforecast](https://api.met.no/weatherapi/locationforecast/2.0/documentation) | Credible global nine-day forecast and commercially reusable data, but the public service is optimized primarily for Norway/Nordic needs and does not solve China/Singapore official alerts; retain as a possible fallback |
-| [Meteostat](https://dev.meteostat.net/) | Open tooling and data, but focused on historical observations and climate time series rather than the live forecast/alert capability required here |
-
-The adapter should cache normalized results for 5–10 minutes by coordinates, units, timezone, and forecast window. Use a three-second provider deadline with bounded retry only before a response begins. Keep a separate future `WeatherAlertProvider`; potential official sources include Singapore NEA/MSS and China CMA, subject to API access and licensing review. A forecast remains useful when alerts are unavailable, but the result must explicitly contain `alertsSupported: false`.
+**MCP decision:** do not use Caiyun’s MCP server for the MVP. It exposes multiple remote tools, including historical data and alerts, while this agent needs one locally versioned schema, fixed request budget, deterministic result projection, and no model-visible credential path. Re-evaluate MCP only when multiple independently administered providers justify a restricted MCP adapter.
 
 Location resolution order:
 
-1. a location explicitly stated in the current request;
-2. an explicit, user-configured default weather location;
+1. a city or area name explicitly stated in the current request;
+2. an explicit, user-configured default place;
 3. a consented coarse home-location projection from the console;
 4. otherwise ask a clarification question.
 
@@ -918,7 +912,7 @@ Run it against every model allowlist change.
 
 - Canonical assistant endpoint.
 - General-assistant prompt.
-- Open-Meteo commercial adapter, attribution, deployment-path latency probe, cache, and explicit location handling.
+- Caiyun Weather v2.6 and AMap geocoding adapters, attribution, deployment-path latency probe, cache, and city/area handling.
 - Date/time tool.
 - `ConversationRepository` backed by Makers `context.store`, with separate display and redacted model projections.
 - Deterministic fast path for exact commands before the LLM, using the same capability policy.
@@ -976,7 +970,7 @@ Run it against every model allowlist change.
 10. **No migration constraint.** Existing files are reused only when they fit the new architecture.
 11. **Console owns home authority.** Xiaomi identity, exposure, current membership, scene revision, and final execution stay in `mijia-web-console`.
 12. **Known-schema capability negotiation.** The console advertises availability; the agent exposes only locally known, versioned tool schemas.
-13. **Open-Meteo first.** Use its commercial hosted API for Phase 1; keep alerts explicitly unsupported until an authoritative regional adapter exists.
+13. **Caiyun first.** Use Caiyun Weather v2.6 for the mainland-China Phase 1 MVP; keep alerts explicitly unsupported until alert policy is designed.
 14. **Blob-backed action claims.** Existing idempotency keys are enforced with EdgeOne Blob conditional creates and strong reads; KV is not authoritative.
 15. **Makers storage behind our interface.** Use `context.store` through `ConversationRepository` for separate display and redacted model projections.
 16. **Fast path in Phase 1.** Exact deterministic commands ship with the first general-assistant release and use the same tool policies.
@@ -990,7 +984,7 @@ Run it against every model allowlist change.
 
 | Topic | Decision |
 |---|---|
-| Weather | Open-Meteo commercial hosted API in Phase 1; AGPLv3 self-hosting is an exit path; alerts remain explicitly unsupported |
+| Weather | AMap resolves China city/area names server-side; Caiyun Weather v2.6 fetches the result and alerts remain explicitly unsupported |
 | Action identity | Retain the existing idempotency key and bind it to the canonical request hash |
 | Action storage | EdgeOne Blob in `mijia-web-console`; atomic claim with `onlyIfNew`, strong reads, and immutable lifecycle records; never authoritative KV |
 | Conversation storage | Makers `context.store` behind `ConversationRepository`; generic messages for display and `state` for redacted model history |
@@ -1002,7 +996,7 @@ Run it against every model allowlist change.
 | Legacy router | Deprecated immediately, no new features, explicit temporary flag only, and deleted at core-project completion |
 | Phase 0 local CLI | Reuse `mijia-agent-local-prod` safety and process harness; retarget it to the canonical assistant with isolated `fake` and production `live-read` profiles; never use it as proof of deployed EdgeOne persistence or action semantics |
 
-The remaining work is validation rather than product choice: measure Open-Meteo latency from the deployed EdgeOne paths, verify Blob conflict behavior under concurrency, and certify the initially selected model with the tool/stream/usage contract suite.
+The remaining work is validation rather than product choice: measure Caiyun latency from deployed EdgeOne paths, verify Blob conflict behavior under concurrency, and certify the initially selected model with the tool/stream/usage contract suite.
 
 ## 24. First implementation issue set
 
@@ -1012,7 +1006,7 @@ The remaining work is validation rather than product choice: measure Open-Meteo 
 4. Implement a four-iteration engine using fake provider/tool fixtures.
 5. Replace the router prompt with the general-assistant contract.
 6. Adapt `mijia-agent-local-prod` to the canonical endpoint and event contract, add isolated `fake` and `live-read` profiles, and implement the §14.2 acceptance matrix.
-7. Add `get_current_datetime` and the Open-Meteo provider with commercial endpoint configuration, caching, attribution, and latency telemetry.
+7. Add `get_current_datetime` and the Caiyun Weather v2.6 provider with token configuration, caching, attribution, and latency telemetry.
 8. Add canonical response outcomes and channel renderers.
 9. Implement `ConversationRepository` and its Makers `context.store` adapter with separate display/model projections.
 10. Implement the Phase 1 deterministic recognizer through the same capability registry and policy checks.
