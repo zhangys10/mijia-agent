@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from mijia_assistant.capabilities.base import tool_schema
@@ -28,12 +29,14 @@ class ConversationEngine:
         max_iterations: int = 4,
         max_reads: int = 8,
         max_reads_per_tool: int = 4,
+        tool_result_logger: Callable[..., None] | None = None,
     ):
         self.provider = provider
         self.registry = registry
         self.max_iterations = max_iterations
         self.max_reads = max_reads
         self.max_reads_per_tool = max_reads_per_tool
+        self.tool_result_logger = tool_result_logger
 
     async def run(
         self, ctx: AssistantContext, message: str, history: list[ModelMessage] | None = None
@@ -157,12 +160,14 @@ class ConversationEngine:
                     )
                 except AssistantError as error:
                     events.append(ToolEvent(name=call.name, status="error"))
+                    self._log_tool_result(call.name, "error")
                     return self._tool_error_response(
                         ctx, events, usage, client_data, error.code, call.name
                     )
                 except asyncio.TimeoutError:
                     if self._is_write(capability.risk):
                         events.append(ToolEvent(name=call.name, status="outcome_unknown"))
+                        self._log_tool_result(call.name, "outcome_unknown")
                         return AssistantResponse(
                             request_id=ctx.request_id,
                             conversation_id=ctx.conversation_id,
@@ -175,15 +180,18 @@ class ConversationEngine:
                             usage=usage,
                         )
                     events.append(ToolEvent(name=call.name, status="error"))
+                    self._log_tool_result(call.name, "error")
                     return self._tool_error_response(
                         ctx, events, usage, client_data, "DEADLINE_EXCEEDED", call.name
                     )
                 except Exception:  # noqa: BLE001 -- tool failures become readable assistant replies.
                     events.append(ToolEvent(name=call.name, status="error"))
+                    self._log_tool_result(call.name, "error")
                     return self._tool_error_response(
                         ctx, events, usage, client_data, "TOOL_FAILED", call.name
                     )
                 events.append(ToolEvent(name=call.name, status=result.status))
+                self._log_tool_result(call.name, result.status)
                 if result.client_data is not None:
                     client_data = result.client_data
                 if result.display_text:
@@ -226,6 +234,14 @@ class ConversationEngine:
             await asyncio.sleep(0)
 
         raise AssistantError("MODEL_ITERATION_LIMIT", 502)
+
+    def _log_tool_result(self, tool_name: str, status: str) -> None:
+        if self.tool_result_logger is None:
+            return
+        try:
+            self.tool_result_logger(tool_name=tool_name, status=status)
+        except Exception:  # noqa: BLE001 -- logging must never fail a turn.
+            return
 
     @staticmethod
     def _tool_error_response(

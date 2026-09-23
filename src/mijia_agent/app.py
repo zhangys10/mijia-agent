@@ -114,7 +114,9 @@ def create_lifespan(
                     )
                 )
             app.state.assistant_engine = assistant_engine or ConversationEngine(
-                OpenAICompatibleProvider(gateway), CapabilityRegistry(capabilities)
+                OpenAICompatibleProvider(gateway),
+                CapabilityRegistry(capabilities),
+                tool_result_logger=gateway.logger.log_tool_result,
             )
             yield
 
