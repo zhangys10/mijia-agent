@@ -84,7 +84,7 @@ class ConversationEngine:
                     self.provider.complete(transcript, schemas, ctx),
                     timeout=self._remaining_seconds(ctx),
                 )
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 raise AssistantError("DEADLINE_EXCEEDED", 504) from None
             usage = usage.plus(step.usage)
             if not step.tool_calls:
@@ -144,7 +144,7 @@ class ConversationEngine:
                         capability.invoke(ctx, call.arguments),
                         timeout=self._remaining_seconds(ctx),
                     )
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     if self._is_write(capability.risk):
                         events.append(ToolEvent(name=call.name, status="outcome_unknown"))
                         return AssistantResponse(
