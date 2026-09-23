@@ -9,6 +9,8 @@
 | `AI_AGENT_BASE_URL` | New adapter's HTTPS origin | No | No |
 | `AI_AGENT_INTERNAL_SECRET` | Sends | Verifies | No |
 | `AI_AUTOMATION_TOKEN_SECRET` | Issues and verifies short-lived Web/Siri automation tokens | No | No |
+| `APP_ENV` | Required; set production to `production` for token AAD | No | No |
+| `AI_AUTOMATION_TOKEN_KEY_ID` | Optional token key version; issuer/verifier values must match | No | No |
 | `MIJIA_CONSOLE_BASE_URL` | No | Uses | Uses |
 | `AI_TOOLS_INTERNAL_SECRET` | Verifies | Sends | Sends |
 | `AI_PYTHON_BASE_URL` | No | Uses (`https://<makers-host>/api`) | No |
@@ -64,9 +66,12 @@ Deploy the Web console and Makers adapter changes as one coordinated release. Th
 now sends `automationToken`, and the adapter rejects the retiring `sessionBinding` field; a
 partially deployed pair therefore fails closed with `AI_INVALID_REQUEST` rather than using a
 second authorization path. Ensure the console has `AI_AUTOMATION_TOKEN_SECRET` before rollout,
-then verify a read-only home question produces a successful `authorize` tool call followed by
-the selected home-read tool. Python receives the opaque token only through the adapter and
-never logs it or sends it to the model.
+set console `APP_ENV=production`, and ensure any configured `AI_AUTOMATION_TOKEN_KEY_ID` is the
+same for `/api/ai/chat`, `/api/ai/tools`, and offline token generation. Edge Functions receive
+these values through `context.env`; token issuance and verification must not depend on Node's
+`process.env`. Redeploy the console after changing bindings, then verify a read-only home question
+produces a successful `authorize` tool call followed by the selected home-read tool. Python
+receives the opaque token only through the adapter and never logs it or sends it to the model.
 
 ## EdgeOne Cloud Functions
 
