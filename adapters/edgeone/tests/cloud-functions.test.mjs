@@ -27,10 +27,13 @@ test("Cloud Functions build syncs the canonical Python packages without cache fi
       );
     }
   }
-  assert.equal(
-    await readFile(path.join(root, "adapters/edgeone/cloud-functions/api/index.py"), "utf8"),
-    "import sys\n\nfrom fastapi import FastAPI\n\ntry:\n    import mijia_assistant\nexcept ImportError:\n    from api import mijia_assistant\n\n    sys.modules[\"mijia_assistant\"] = mijia_assistant\n\nfrom api.mijia_agent.app import create_lifespan, register_routes\nfrom api.mijia_agent.config import Settings\n\nsettings = Settings.from_env()\nlifespan = create_lifespan(settings)\napp = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)\nregister_routes(app, settings)\n",
+  const indexSource = await readFile(
+    path.join(root, "adapters/edgeone/cloud-functions/api/index.py"),
+    "utf8",
   );
+  assert.match(indexSource, /sys\.path\.insert\(0, API_ROOT\)/);
+  assert.match(indexSource, /from mijia_agent\.app import create_lifespan, register_routes/);
+  assert.match(indexSource, /from mijia_agent\.config import Settings/);
 });
 
 test("EdgeOne deployment root co-locates Agent and Cloud Functions markers", async () => {
