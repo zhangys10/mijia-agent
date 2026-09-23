@@ -351,6 +351,37 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     assert result.tool_events[0].status == "error"
 
 
+def test_unexpected_tool_exception_returns_readable_answer():
+    class ExplodingRead:
+        name = "get_home_environment"
+        description = "Test-only failing home read"
+        risk: Literal["home_read"] = "home_read"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+        }
+
+        async def is_available(self, ctx):
+            return True
+
+        async def invoke(self, ctx, args):
+            raise TypeError("unexpected adapter signature")
+
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})])
+    )
+    result = run(
+        ConversationEngine(provider, CapabilityRegistry([ExplodingRead()])),
+        "看看家里情况",
+        context(automation_token=SecretStr("opaque-token"), home_selector="home"),
+    )
+
+    assert result.outcome == "tool_answer"
+    assert result.answer.text == "查询暂时无法完成，请稍后再试。"
+    assert result.tool_events[0].status == "error"
+
+
 class TerminalWrite:
     name = "activate_scene"
     description = "Test-only terminal action"

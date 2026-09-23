@@ -167,6 +167,11 @@ class ConversationEngine:
                     return self._tool_error_response(
                         ctx, events, usage, client_data, "DEADLINE_EXCEEDED", call.name
                     )
+                except Exception:  # noqa: BLE001 -- tool failures become readable assistant replies.
+                    events.append(ToolEvent(name=call.name, status="error"))
+                    return self._tool_error_response(
+                        ctx, events, usage, client_data, "TOOL_FAILED", call.name
+                    )
                 events.append(ToolEvent(name=call.name, status=result.status))
                 if result.client_data is not None:
                     client_data = result.client_data
