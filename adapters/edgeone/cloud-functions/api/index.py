@@ -1,16 +1,17 @@
 import sys
+from pathlib import Path
 
 from fastapi import FastAPI
 
-try:
-    import mijia_assistant
-except ImportError:
-    from api import mijia_assistant
+# EdgeOne loads this file as ``api/index.py`` with the parent directory on
+# sys.path.  The copied application packages live beside this file and use
+# top-level imports, so make that directory importable before loading them.
+API_ROOT = str(Path(__file__).resolve().parent)
+if API_ROOT not in sys.path:
+    sys.path.insert(0, API_ROOT)
 
-    sys.modules["mijia_assistant"] = mijia_assistant
-
-from api.mijia_agent.app import create_lifespan, register_routes
-from api.mijia_agent.config import Settings
+from mijia_agent.app import create_lifespan, register_routes
+from mijia_agent.config import Settings
 
 settings = Settings.from_env()
 lifespan = create_lifespan(settings)
