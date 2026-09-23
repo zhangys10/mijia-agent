@@ -8,6 +8,7 @@ from typing import ClassVar, Literal
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from mijia_agent.app import create_app
 from mijia_agent.config import Settings
@@ -19,6 +20,7 @@ from mijia_assistant.capabilities import (
     CapabilityRegistry,
     CurrentDateTimeCapability,
     FakeWeatherCapability,
+    HomeEnvironmentCapability,
 )
 from mijia_assistant.capabilities.weather import amap_signature, caiyun_signature
 from mijia_assistant.conversation import ConversationEngine
@@ -326,6 +328,58 @@ def test_tool_result_error_returns_readable_answer_without_model_retry():
     assert result.answer.text == "抱歉，这个地点的天气暂时查询不到，请稍后再试。"
     assert result.tool_events[0].status == "error"
     assert len(provider.requests) == 1
+
+
+def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
+    class FailingHomeTools:
+        async def get_home_status(self, user_token, request_id, home):
+            assert (user_token, request_id, home) == ("opaque-token", "req_phase0_test", "home")
+            raise AgentError("MI_CLOUD_ERROR", 502)
+
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})])
+    )
+    capability = HomeEnvironmentCapability(FailingHomeTools())
+    result = run(
+        ConversationEngine(provider, CapabilityRegistry([capability])),
+        "看看家里情况",
+        context(automation_token=SecretStr("opaque-token"), home_selector="home"),
+    )
+
+    assert result.outcome == "tool_answer"
+    assert result.answer.text == "查询暂时无法完成，请稍后再试。"
+    assert result.tool_events[0].status == "error"
+
+
+def test_unexpected_tool_exception_returns_readable_answer():
+    class ExplodingRead:
+        name = "get_home_environment"
+        description = "Test-only failing home read"
+        risk: Literal["home_read"] = "home_read"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+        }
+
+        async def is_available(self, ctx):
+            return True
+
+        async def invoke(self, ctx, args):
+            raise TypeError("unexpected adapter signature")
+
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})])
+    )
+    result = run(
+        ConversationEngine(provider, CapabilityRegistry([ExplodingRead()])),
+        "看看家里情况",
+        context(automation_token=SecretStr("opaque-token"), home_selector="home"),
+    )
+
+    assert result.outcome == "tool_answer"
+    assert result.answer.text == "查询暂时无法完成，请稍后再试。"
+    assert result.tool_events[0].status == "error"
 
 
 class TerminalWrite:
