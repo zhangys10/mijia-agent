@@ -40,6 +40,7 @@ def test_edgeone_cloud_functions_entry_exposes_the_internal_asgi_app(monkeypatch
     assert {route.path for route in module.app.routes if hasattr(route, "path")} == {
         "/healthz",
         "/internal/v1/turn",
+        "/internal/v1/assistant",
         "/ai/command",
         "/ai/assistant",
     }

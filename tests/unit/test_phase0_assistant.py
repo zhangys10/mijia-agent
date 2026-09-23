@@ -277,12 +277,14 @@ def test_live_read_profile_clarifies_location_without_asking_the_model():
         {"location": "Singapore", "days": 8},
     ],
 )
-def test_malformed_tool_arguments_fail_closed(arguments):
+def test_malformed_tool_arguments_return_readable_tool_error(arguments):
     provider = ScriptedProvider(
         ModelTurn(tool_calls=[ToolCall(id="bad", name="get_weather", arguments=arguments)])
     )
-    with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
-        run(ConversationEngine(provider, CapabilityRegistry([FakeWeatherCapability()])))
+    result = run(ConversationEngine(provider, CapabilityRegistry([FakeWeatherCapability()])))
+    assert result.outcome == "tool_answer"
+    assert result.tool_events[0].status == "error"
+    assert "天气服务" in result.answer.text
 
 
 def test_invented_or_unavailable_tool_fails_closed():
@@ -291,6 +293,39 @@ def test_invented_or_unavailable_tool_fails_closed():
     )
     with pytest.raises(AssistantError, match="TOOL_NOT_AVAILABLE"):
         run(ConversationEngine(provider, CapabilityRegistry()))
+
+
+class FailedRead:
+    name = "get_weather"
+    description = "Test-only failed read"
+    risk: Literal["general_read"] = "general_read"
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {},
+    }
+
+    async def is_available(self, ctx):
+        return True
+
+    async def invoke(self, ctx, args):
+        return CapabilityResult(
+            status="error",
+            model_content={"provider": "test", "status": "location_unavailable"},
+            client_data={"type": "weather", "status": "location_unavailable"},
+        )
+
+
+def test_tool_result_error_returns_readable_answer_without_model_retry():
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="weather", name="get_weather", arguments={})]),
+        ModelTurn(content="must not be consumed"),
+    )
+    result = run(ConversationEngine(provider, CapabilityRegistry([FailedRead()])))
+
+    assert result.answer.text == "抱歉，这个地点的天气暂时查询不到，请稍后再试。"
+    assert result.tool_events[0].status == "error"
+    assert len(provider.requests) == 1
 
 
 class TerminalWrite:
