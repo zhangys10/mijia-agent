@@ -160,14 +160,14 @@ class ConversationEngine:
                     )
                 except AssistantError as error:
                     events.append(ToolEvent(name=call.name, status="error"))
-                    self._log_tool_result(call.name, "error")
+                    self._log_tool_result(call.name, "error", error.code)
                     return self._tool_error_response(
                         ctx, events, usage, client_data, error.code, call.name
                     )
                 except asyncio.TimeoutError:
                     if self._is_write(capability.risk):
                         events.append(ToolEvent(name=call.name, status="outcome_unknown"))
-                        self._log_tool_result(call.name, "outcome_unknown")
+                        self._log_tool_result(call.name, "outcome_unknown", "DEADLINE_EXCEEDED")
                         return AssistantResponse(
                             request_id=ctx.request_id,
                             conversation_id=ctx.conversation_id,
@@ -180,13 +180,13 @@ class ConversationEngine:
                             usage=usage,
                         )
                     events.append(ToolEvent(name=call.name, status="error"))
-                    self._log_tool_result(call.name, "error")
+                    self._log_tool_result(call.name, "error", "DEADLINE_EXCEEDED")
                     return self._tool_error_response(
                         ctx, events, usage, client_data, "DEADLINE_EXCEEDED", call.name
                     )
                 except Exception:  # noqa: BLE001 -- tool failures become readable assistant replies.
                     events.append(ToolEvent(name=call.name, status="error"))
-                    self._log_tool_result(call.name, "error")
+                    self._log_tool_result(call.name, "error", "TOOL_FAILED")
                     return self._tool_error_response(
                         ctx, events, usage, client_data, "TOOL_FAILED", call.name
                     )
@@ -198,6 +198,8 @@ class ConversationEngine:
                     fallback_text = result.display_text
                 if result.status == "error":
                     detail = result.model_content if isinstance(result.model_content, dict) else {}
+                    error_code = str(detail.get("status", "TOOL_FAILED"))
+                    self._log_tool_result(call.name, "error", error_code)
                     return self._tool_error_response(
                         ctx,
                         events,
@@ -206,6 +208,7 @@ class ConversationEngine:
                         str(detail.get("status", "TOOL_FAILED")),
                         call.name,
                     )
+                self._log_tool_result(call.name, result.status)
                 if self._is_write(capability.risk) or result.is_terminal:
                     outcome = (
                         "outcome_unknown" if result.status == "outcome_unknown" else "action_result"
@@ -235,11 +238,11 @@ class ConversationEngine:
 
         raise AssistantError("MODEL_ITERATION_LIMIT", 502)
 
-    def _log_tool_result(self, tool_name: str, status: str) -> None:
+    def _log_tool_result(self, tool_name: str, status: str, error_code: str | None = None) -> None:
         if self.tool_result_logger is None:
             return
         try:
-            self.tool_result_logger(tool_name=tool_name, status=status)
+            self.tool_result_logger(tool_name=tool_name, status=status, error_code=error_code)
         except Exception:  # noqa: BLE001 -- logging must never fail a turn.
             return
 

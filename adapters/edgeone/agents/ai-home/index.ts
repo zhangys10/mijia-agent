@@ -47,7 +47,7 @@ export async function onRequest(context: Context) {
         signal: AbortSignal.any([AbortSignal.timeout(45000), ...(context.request.signal ? [context.request.signal] : [])]),
         headers: { Authorization: `Bearer ${pythonSecret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ requestId, conversationId, principalId: input.principalId,
-          homeId: input.homeId, scopes: input.scopes, sessionBinding: input.sessionBinding,
+          homeId: input.homeId, scopes: input.scopes, automationToken: input.automationToken,
           message, idempotencyKey: key, locale: body.locale ?? "zh-CN", timezone: body.timezone ?? "Asia/Shanghai", history }),
       });
     } catch {

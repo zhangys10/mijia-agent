@@ -142,6 +142,22 @@ def test_tool_result_log_records_only_tool_name_and_status():
     assert set(record) == {"event", "tool", "status", "ts"}
 
 
+def test_failed_tool_result_log_adds_only_safe_error_code():
+    sink = StringIO()
+    LlmCallLogger(sink=sink).log_tool_result(
+        tool_name="get_home_environment", status="error", error_code="MI_CLOUD_ERROR"
+    )
+
+    record = json.loads(sink.getvalue().splitlines()[0])
+    assert record == {
+        "event": "tool_result",
+        "tool": "get_home_environment",
+        "status": "error",
+        "errorCode": "MI_CLOUD_ERROR",
+        "ts": record["ts"],
+    }
+
+
 def test_missing_weather_location_can_return_clarification_without_tool():
     weather = FakeWeatherCapability()
     provider = ScriptedProvider(
@@ -640,6 +656,44 @@ def test_canonical_ingress_authenticates_token_before_model_call():
     assert response.status_code == 401
     assert response.json()["code"] == "AUTOMATION_TOKEN_INVALID"
     assert provider.requests == []
+
+
+def test_internal_canonical_ingress_accepts_only_the_automation_token_envelope():
+    provider = ScriptedProvider(ModelTurn(content="A direct answer."))
+    app = create_app(
+        app_settings(),
+        service=object(),
+        command_service=object(),
+        assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
+        assistant_tools=object(),
+    )
+    body = {
+        "requestId": "req_canonical_internal_000001",
+        "conversationId": "conv_canonical_001",
+        "principalId": "usr_canonical_test",
+        "homeId": "home-canonical",
+        "message": "你好",
+        "idempotencyKey": "idem_canonical_internal_000001",
+        "scopes": ["ai:chat"],
+        "automationToken": "opaque-automation-token",
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/v1/assistant",
+            headers={"Authorization": "Bearer " + app_settings().internal_secret},
+            json=body,
+        )
+        legacy_envelope = client.post(
+            "/internal/v1/assistant",
+            headers={"Authorization": "Bearer " + app_settings().internal_secret},
+            json={key: value for key, value in body.items() if key != "automationToken"}
+            | {"sessionBinding": "legacy-binding"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "A direct answer."
+    assert legacy_envelope.status_code == 400
+    assert legacy_envelope.json()["code"] == "AI_INVALID_REQUEST"
 
 
 def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():

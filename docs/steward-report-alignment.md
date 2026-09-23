@@ -1,5 +1,10 @@
 # Steward report alignment
 
+> Historical alignment record. The canonical Phase 1 contract is now the automation-token
+> flow in `mijia-general-assistant-design.md` and `contracts.md`; references below to
+> `sessionBinding` or `/internal/v1/turn` describe the pre-canonical implementation and
+> must not guide new work.
+
 **Inputs:** `mijia-steward-report.html` (云栖管家 architecture decision, 2026.09),
 `mijia-agent` @ `origin/main` `e34164d`, `mijia-web-console` @ `origin/main` `6108e33`
 plus branch `feat/ai-tools-user-token-path`, and live probes of

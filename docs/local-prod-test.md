@@ -95,7 +95,9 @@ Both files must be owner-only (`chmod 600`); the CLI refuses group/world-readabl
 and always writes the token file `0600`. The cookie file and the generated token must never
 be committed, put on a command line, or left in shell history. During `run`, the token is
 held only by the parent CLI and sent to the loopback route; it is not added to the child
-environment or Uvicorn argv. Proxy environment variables are disabled for both loopback and
+environment or Uvicorn argv. The canonical assistant forwards that same opaque automation
+token to the production console only after selecting a home-read capability, matching the
+web adapter's production tool envelope. Proxy environment variables are disabled for both loopback and
 production requests so credentials cannot be captured by an inherited HTTP(S) proxy.
 
 Token generation requires the console checkout (default `../mijia-web-console`, override
@@ -119,7 +121,7 @@ mijia-agent-local-prod run --keep-log .local-prod/llm-calls.jsonl
 
 The retained file is set to `0600`, and `.local-prod/` is ignored by Git. Canonical-assistant
 records contain request metadata, tool names, bounded response lengths, usage, and latency; tool
-outcomes add only the tool name and status (`success`, `partial`, `error`, or `outcome_unknown`). They exclude credentials, tokens,
+outcomes add only the tool name, status (`success`, `partial`, `error`, or `outcome_unknown`), and a safe error code on failures. They exclude credentials, tokens,
 prompts, model response text, and private tool results. Delete a retained operational log when
 the investigation is complete.
 

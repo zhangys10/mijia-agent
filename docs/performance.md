@@ -8,7 +8,7 @@ governed by [architecture.md](architecture.md) and [contracts.md](contracts.md).
 ## Context
 
 The observed latency is cumulative, not only an LLM problem. A normal browser turn
-currently runs `/api/ai/chat` → Makers `/ai-home` → Python `/internal/v1/turn`, while
+currently runs `/api/ai/chat` → Makers `/ai-home` → Python `/internal/v1/assistant`, while
 synchronously validating Xiaomi home membership three times, loading the scene catalog,
 calling `@makers/deepseek-v4-flash` non-streaming, and persisting receipts/history. The
 model call alone is logged at roughly 4–5 seconds; the duplicated serial work explains the
@@ -70,8 +70,8 @@ Representative files:
 
 ## 2. Replace repeated Xiaomi ownership lookups with a short-lived request authorization proof
 
-Retain the current sealed `sessionBinding`, but add a separate versioned authorization proof
-signed with a new purpose-specific secret shared only by the console and Makers adapter. Do
+Use the canonical sealed automation token and add a versioned authorization proof only when
+the console capability API requires it. Do not revive `sessionBinding` as a second path. Do
 not share `XIAOMI_SESSION_SECRET` or the new signing secret with Python; Python only carries
 the proof as an opaque `SecretStr` to console tools.
 

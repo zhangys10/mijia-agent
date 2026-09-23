@@ -16,9 +16,11 @@ route — that remains a future M3 adapter contract.
 
 ## Makers → Python
 
-`POST /api/internal/v1/turn` externally, `Authorization: Bearer <AI_PYTHON_INTERNAL_SECRET>`.
+The canonical endpoint is `POST /api/internal/v1/assistant` externally,
+with `Authorization: Bearer <AI_PYTHON_INTERNAL_SECRET>`.
 EdgeOne strips `/api` before invoking the FastAPI route, which remains
-`POST /internal/v1/turn`.
+`POST /internal/v1/assistant`. The older `/internal/v1/turn` binding contract is
+legacy-only and must not receive new assistant capabilities.
 Maximum raw body: 64 KiB. Requests and nested history messages reject unknown fields.
 
 ```json
@@ -30,7 +32,7 @@ Maximum raw body: 64 KiB. Requests and nested history messages reject unknown fi
   "message": "查看可用场景",
   "idempotencyKey": "example-idempotency-0001",
   "scopes": ["ai:chat"],
-  "sessionBinding": "opaque-console-issued-binding",
+  "automationToken": "opaque-console-issued-automation-token",
   "locale": "zh-CN",
   "timezone": "Asia/Shanghai",
   "history": []
@@ -39,7 +41,7 @@ Maximum raw body: 64 KiB. Requests and nested history messages reject unknown fi
 
 `history` is adapter-owned, at most 12 user/assistant messages, each at most 2000
 characters. The body cannot contain a Xiaomi session, Gateway credentials or arbitrary
-provider URL. Bindings and service credentials never enter model messages or error details.
+provider URL. Automation tokens and service credentials never enter model messages or error details.
 
 Responses preserve `requestId`, `conversationId`, `message`, `intent`, optional
 `scenes`/`tool`, and internal `usage` with prompt/completion/total tokens and an
@@ -52,13 +54,17 @@ model `usage`; do not drop known usage when implementing failure settlement.
 `POST /api/ai/tools`, `Authorization: Bearer <AI_TOOLS_INTERNAL_SECRET>`.
 Maximum raw body: 32 KiB. Server-to-server only, not a replacement for browser APIs.
 
-The envelope contains `requestId`, `principalId`, `homeId`, `scopes`, `sessionBinding`,
-optional `idempotencyKey`, `tool`, and `arguments`. The console verifies and decrypts
-the binding, re-derives the principal from its session, and reloads current home access.
+The canonical assistant uses a single automation-token envelope. The adapter sends the
+opaque token in `X-Ai-User-Token` after the service bearer; its `authorize` request body
+contains only `requestId`, `tool`, and `arguments`. The console decrypts the token,
+re-derives the principal, resolves the bound home, and returns the trusted
+`principalId`, `homeId`, and read-only `scopes` so the adapter can compare them with its
+server-created turn before loading conversation state. Python forwards the same opaque
+token only after a home capability is selected.
 
 | Tool | Arguments | Current behavior |
 |---|---|---|
-| `authorize` | `{}` | `{ "ok": true }` after authentication/home checks; not model-visible |
+| `authorize` | `{}` | `{ "ok": true, "principalId", "homeId", "scopes": ["ai:chat"] }` after fresh token authentication/home checks; adapter-only, not model-visible |
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
@@ -190,10 +196,10 @@ logged as JSONL (`AI_LLM_LOG_PATH`, stdout by default): request payload, bounded
 response excerpt, usage, latency, `llm_call_failed` on error — no tokens, bindings,
 gateway keys, or principal IDs ever appear.
 
-The console `/api/ai/tools` accepts the token via the new `X-Ai-User-Token` header
-after the service bearer; the `sessionBinding` envelope path is unchanged. Body uses
-`home` (name or ID) on the token path. The Python tool list for both pipelines matches
-the console contract: `list_scenes`, `get_home_status` and `get_device_status`
+The console `/api/ai/tools` accepts the token via the `X-Ai-User-Token` header
+after the service bearer. Body uses `home` (name or ID) on direct automation calls;
+the web adapter uses the token-bound home. The Python tool list for the canonical pipeline
+matches the console contract: `list_scenes`, `get_home_status` and `get_device_status`
 (read-only), `activate_scene` (disabled). After the console's phase-3 retirement, its legacy `/api/ai/command` route
 returns `410 AI_COMMAND_RETIRED` and this repo's `POST /ai/command` is the only command
 ingress; whether the console grows a thin Siri pass-through is a cutover decision.

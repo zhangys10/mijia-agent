@@ -29,7 +29,7 @@ from .command_service import CommandService
 from .config import Settings
 from .console import ConsoleTools
 from .gateway import Gateway
-from .models import AgentError, Turn
+from .models import AgentError, AssistantTurn, Turn
 from .service import AgentService
 
 MAX_COMMAND_BODY = 65536
@@ -317,7 +317,7 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 raw.extend(chunk)
                 if len(raw) > 65536:
                     raise AgentError("AI_INVALID_REQUEST", 400)
-            turn = Turn.model_validate(json.loads(raw))
+            turn = AssistantTurn.model_validate(json.loads(raw))
             request_id = turn.requestId
             context = AssistantContext(
                 request_id=turn.requestId,
@@ -329,7 +329,7 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 principal_ref=turn.principalId,
                 home_ref=turn.homeId,
                 home_selector=turn.homeId,
-                automation_token=turn.sessionBinding,
+                automation_token=turn.automationToken,
             )
             history = [ModelMessage(role=item.role, content=item.content) for item in turn.history]
             result = await app.state.assistant_engine.run(context, turn.message, history)

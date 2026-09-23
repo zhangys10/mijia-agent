@@ -2,7 +2,7 @@
 
 One line per LLM call contains the request payload (messages, tools, params —
 aliases only by construction), a bounded response excerpt, usage, and latency;
-tool outcomes contain only the tool name and status. Gateway credentials are
+tool outcomes contain only the tool name, status, and (for failures) a safe error code. Gateway credentials are
 transport headers and never enter payloads; bindings, tokens, and Xiaomi secrets
 never reach these records. Logging failures must never break a turn.
 """
@@ -38,5 +38,9 @@ class LlmCallLogger:
         *,
         tool_name: str,
         status: str,
+        error_code: str | None = None,
     ) -> None:
-        self.log({"event": "tool_result", "tool": tool_name, "status": status})
+        record = {"event": "tool_result", "tool": tool_name, "status": status}
+        if error_code:
+            record["errorCode"] = error_code[:64]
+        self.log(record)
