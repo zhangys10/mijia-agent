@@ -1,11 +1,24 @@
 import hmac
 import json
+import logging
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
+
+from mijia_assistant.api import AssistantRequest, public_response
+from mijia_assistant.capabilities import (
+    CapabilityRegistry,
+    DeviceStatusCapability,
+    HomeEnvironmentCapability,
+)
+from mijia_assistant.conversation import ConversationEngine, ConversationRepository
+from mijia_assistant.models import AssistantContext, AssistantError
+from mijia_assistant.providers import OpenAICompatibleProvider
 
 from .command_console import ConsoleAgentTools
 from .command_idempotency import request_hash, valid_idempotency_key
@@ -19,6 +32,7 @@ from .service import AgentService
 
 MAX_COMMAND_BODY = 65536
 MAX_AUTOMATION_TOKEN = 8192
+LOGGER = logging.getLogger("mijia_agent.legacy")
 
 # Console /api/ai/command public error codes, mapped from internal codes.
 COMMAND_ERROR_MAP = {
@@ -44,12 +58,23 @@ def create_lifespan(
     config: Settings,
     service: AgentService | None = None,
     command_service: CommandService | None = None,
+    assistant_engine: ConversationEngine | None = None,
+    assistant_tools: ConsoleAgentTools | None = None,
+    conversation_repository: ConversationRepository | None = None,
 ):
     @asynccontextmanager
     async def lifespan(app):
-        if service is not None and command_service is not None:
+        if (
+            service is not None
+            and command_service is not None
+            and assistant_engine is not None
+            and assistant_tools is not None
+        ):
             app.state.service = service
             app.state.command_service = command_service
+            app.state.assistant_engine = assistant_engine
+            app.state.assistant_tools = assistant_tools
+            app.state.conversation_repository = conversation_repository or ConversationRepository()
             yield
             return
         async with httpx.AsyncClient(follow_redirects=False) as client:
@@ -64,6 +89,18 @@ def create_lifespan(
                 ConsoleAgentTools(config, client),
                 preview=config.environment == "preview",
             )
+            console_tools = ConsoleAgentTools(config, client)
+            app.state.assistant_tools = assistant_tools or console_tools
+            app.state.conversation_repository = conversation_repository or ConversationRepository()
+            app.state.assistant_engine = assistant_engine or ConversationEngine(
+                OpenAICompatibleProvider(gateway),
+                CapabilityRegistry(
+                    [
+                        HomeEnvironmentCapability(console_tools),
+                        DeviceStatusCapability(console_tools),
+                    ]
+                ),
+            )
             yield
 
     return lifespan
@@ -77,6 +114,13 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
 
     @app.get("/ai/command")
     async def command_info():
+        if not config.legacy_router_enabled:
+            return JSONResponse(
+                {"code": "AI_COMMAND_RETIRED", "message": "Legacy router is disabled."},
+                410,
+                headers={"Cache-Control": "no-store"},
+            )
+        LOGGER.info('{"event":"legacy_router_traffic","method":"GET"}')
         return JSONResponse(
             {
                 "status": "ok",
@@ -130,6 +174,14 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
         headers = {"Cache-Control": "no-store"}
         request_id = None
 
+        if not config.legacy_router_enabled:
+            return JSONResponse(
+                {"code": "AI_COMMAND_RETIRED", "message": "Legacy router is disabled."},
+                410,
+                headers=headers,
+            )
+        LOGGER.info('{"event":"legacy_router_traffic","method":"POST"}')
+
         def error(code: str, status: int, message: str) -> JSONResponse:
             return JSONResponse(
                 {"code": code, "message": message, "requestId": request_id},
@@ -176,6 +228,63 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
         except Exception:  # noqa: BLE001 -- HTTP boundary must redact upstream secrets.
             return error("MI_CLOUD_ERROR", 502, "米家服务暂时不可用")
 
+    @app.post("/ai/assistant")
+    async def assistant(request: Request):
+        headers = {"Cache-Control": "no-store"}
+        token = bearer_token(request.headers.get("authorization"))
+        if not token:
+            return JSONResponse({"code": "UNAUTHORIZED"}, 401, headers=headers)
+        if len(token) > MAX_AUTOMATION_TOKEN:
+            return JSONResponse({"code": "AUTOMATION_TOKEN_INVALID"}, 401, headers=headers)
+        request_id = "req_" + uuid.uuid4().hex
+        try:
+            raw = bytearray()
+            async for chunk in request.stream():
+                raw.extend(chunk)
+                if len(raw) > MAX_COMMAND_BODY:
+                    raise AssistantError("INVALID_REQUEST")
+            body = AssistantRequest.model_validate(json.loads(raw))
+            conversation_id = body.conversationId or "conv_" + uuid.uuid4().hex
+            authorization = await app.state.assistant_tools.call(
+                token, request_id, "authorize", body.home, {}
+            )
+            if authorization.get("ok") is not True:
+                raise AssistantError("UNAUTHORIZED", 401)
+            timeout = 12 if body.channel == "siri" else 20
+            context = AssistantContext(
+                request_id=request_id,
+                conversation_id=conversation_id,
+                channel=body.channel,
+                locale=body.locale,
+                timezone=body.timezone,
+                scopes=frozenset({"ai:chat"}),
+                deadline=datetime.now(timezone.utc) + timedelta(seconds=timeout),
+                home_selector=body.home,
+                automation_token=SecretStr(token),
+            )
+            history = await app.state.conversation_repository.get(context)
+            result = await app.state.assistant_engine.run(context, body.text, history)
+            await app.state.conversation_repository.append(context, body.text, result)
+            return JSONResponse(public_response(result), headers=headers)
+        except (ValueError, ValidationError):
+            return JSONResponse(
+                {"code": "INVALID_REQUEST", "requestId": request_id}, 400, headers=headers
+            )
+        except AssistantError as error:
+            return JSONResponse(
+                {"code": error.code, "requestId": request_id}, error.status, headers=headers
+            )
+        except AgentError as error:
+            return JSONResponse(
+                {"code": error.code, "requestId": request_id}, error.status, headers=headers
+            )
+        except Exception:  # noqa: BLE001 -- redact provider and credential failures.
+            return JSONResponse(
+                {"code": "AI_AGENT_UNAVAILABLE", "requestId": request_id},
+                502,
+                headers=headers,
+            )
+
     return app
 
 
@@ -190,10 +299,20 @@ def create_app(
     settings: Settings | None = None,
     service: AgentService | None = None,
     command_service: CommandService | None = None,
+    assistant_engine: ConversationEngine | None = None,
+    assistant_tools: ConsoleAgentTools | None = None,
+    conversation_repository: ConversationRepository | None = None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     app = FastAPI(
-        lifespan=create_lifespan(config, service, command_service),
+        lifespan=create_lifespan(
+            config,
+            service,
+            command_service,
+            assistant_engine,
+            assistant_tools,
+            conversation_repository,
+        ),
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

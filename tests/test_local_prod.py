@@ -693,3 +693,27 @@ def test_restore_signal_handlers_skips_none_and_ignores_restore_errors(monkeypat
     )
 
     assert calls == [(local_prod.signal.SIGHUP, "old")]
+
+
+def test_print_assistant_response_renders_bounded_environment_data(capsys):
+    local_prod.print_assistant_response(
+        {
+            "outcome": "tool_answer",
+            "answer": {"text": "已读取当前家庭环境状态。"},
+            "toolEvents": [{"name": "get_home_environment", "status": "success"}],
+            "data": {
+                "type": "home_environment",
+                "groups": [
+                    {
+                        "label": "甲醛",
+                        "latest": {"value": 0.048, "unit": "mg/m³", "roomName": "客厅"},
+                    }
+                ],
+            },
+            "usage": {"totalTokens": 1},
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "answer: 已读取当前家庭环境状态。" in output
+    assert "data: 甲醛 0.048mg/m³（客厅）" in output

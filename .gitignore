@@ -9,4 +9,5 @@ dist/
 node_modules/
 .edgeone/
 adapters/edgeone/cloud-functions/api/mijia_agent/
+adapters/edgeone/cloud-functions/api/mijia_assistant/
 .local-prod/

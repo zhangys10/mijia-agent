@@ -12,7 +12,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentError, Scene
+from .models import AgentError, DeviceStatus, HomeStatus, Scene
 
 _ALLOWED_ERRORS = {
     "AI_UNAUTHENTICATED": 401,
@@ -94,6 +94,24 @@ class ConsoleAgentTools:
                 raise ValueError("duplicate aliases")
             return scenes
         except (KeyError, TypeError, ValueError, ValidationError):
+            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+
+    async def get_home_status(
+        self, user_token: str, request_id: str, home: str | None
+    ) -> HomeStatus:
+        body = await self.call(user_token, request_id, "get_home_status", home, {})
+        try:
+            return HomeStatus.model_validate(body)
+        except (TypeError, ValueError, ValidationError):
+            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+
+    async def get_device_status(
+        self, user_token: str, request_id: str, home: str | None
+    ) -> DeviceStatus:
+        body = await self.call(user_token, request_id, "get_device_status", home, {})
+        try:
+            return DeviceStatus.model_validate(body)
+        except (TypeError, ValueError, ValidationError):
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
 
     async def activate_scene(

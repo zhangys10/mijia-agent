@@ -4,12 +4,15 @@ import { fileURLToPath } from "node:url";
 
 const adapterRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.dirname(path.dirname(adapterRoot));
-const sourceDirectory = path.join(repositoryRoot, "src", "mijia_agent");
-const outputDirectory = path.join(adapterRoot, "cloud-functions", "api", "mijia_agent");
+const packageNames = ["mijia_agent", "mijia_assistant"];
 
 export async function syncPython() {
-  await rm(outputDirectory, { recursive: true, force: true });
-  await copyPythonPackage(sourceDirectory, outputDirectory);
+  for (const packageName of packageNames) {
+    const sourceDirectory = path.join(repositoryRoot, "src", packageName);
+    const outputDirectory = path.join(adapterRoot, "cloud-functions", "api", packageName);
+    await rm(outputDirectory, { recursive: true, force: true });
+    await copyPythonPackage(sourceDirectory, outputDirectory);
+  }
 }
 
 async function copyPythonPackage(source, output) {
