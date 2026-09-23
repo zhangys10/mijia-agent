@@ -490,6 +490,18 @@ def test_truncated_tool_follow_up_uses_complete_deterministic_fallback():
     assert result.data == {"value": 1}
 
 
+def test_empty_tool_follow_up_uses_complete_deterministic_fallback():
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="read", name="get_status", arguments={})]),
+        ModelTurn(content=""),
+    )
+    result = run(ConversationEngine(provider, CapabilityRegistry([ReadWithFallback()])))
+
+    assert result.outcome == "tool_answer"
+    assert result.answer.text == "已读取当前状态。"
+    assert result.data == {"value": 1}
+
+
 def test_expired_deadline_prevents_model_call():
     provider = ScriptedProvider(ModelTurn(content="too late"))
     expired = context(deadline=datetime.now(timezone.utc) - timedelta(seconds=1))

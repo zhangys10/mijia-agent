@@ -103,6 +103,17 @@ class ConversationEngine:
                     raise AssistantError("MODEL_RESPONSE_TRUNCATED", 502)
                 text = step.content.strip()
                 if not text:
+                    if events and fallback_text:
+                        return AssistantResponse(
+                            request_id=ctx.request_id,
+                            conversation_id=ctx.conversation_id,
+                            status="completed",
+                            outcome="tool_answer",
+                            answer=Answer(text=fallback_text),
+                            data=client_data,
+                            tool_events=events,
+                            usage=usage,
+                        )
                     raise AssistantError("MODEL_RESPONSE_INVALID", 502)
                 outcome = (
                     "clarification"
