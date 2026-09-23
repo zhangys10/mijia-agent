@@ -12,7 +12,9 @@ from pydantic import SecretStr, ValidationError
 
 from mijia_assistant.api import AssistantRequest, public_response
 from mijia_assistant.capabilities import (
+    CaiyunWeatherCapability,
     CapabilityRegistry,
+    CurrentDateTimeCapability,
     DeviceStatusCapability,
     HomeEnvironmentCapability,
 )
@@ -92,14 +94,27 @@ def create_lifespan(
             console_tools = ConsoleAgentTools(config, client)
             app.state.assistant_tools = assistant_tools or console_tools
             app.state.conversation_repository = conversation_repository or ConversationRepository()
+            capabilities = [
+                CurrentDateTimeCapability(),
+                HomeEnvironmentCapability(console_tools),
+                DeviceStatusCapability(console_tools),
+            ]
+            if config.caiyun_base_url and config.amap_base_url:
+                capabilities.append(
+                    CaiyunWeatherCapability(
+                        client,
+                        base_url=config.caiyun_base_url,
+                        app_key=config.caiyun_app_key,
+                        app_secret=config.caiyun_app_secret,
+                        geocoding_url=config.amap_base_url,
+                        geocoding_key=config.amap_api_key,
+                        geocoding_private_key=config.amap_private_key,
+                        timeout_seconds=config.weather_timeout_ms / 1000,
+                        cache_ttl_seconds=config.weather_cache_ttl_seconds,
+                    )
+                )
             app.state.assistant_engine = assistant_engine or ConversationEngine(
-                OpenAICompatibleProvider(gateway),
-                CapabilityRegistry(
-                    [
-                        HomeEnvironmentCapability(console_tools),
-                        DeviceStatusCapability(console_tools),
-                    ]
-                ),
+                OpenAICompatibleProvider(gateway), CapabilityRegistry(capabilities)
             )
             yield
 

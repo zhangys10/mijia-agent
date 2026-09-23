@@ -14,7 +14,13 @@ from mijia_agent.config import Settings
 from mijia_agent.gateway import Gateway
 from mijia_agent.llm_log import LlmCallLogger
 from mijia_agent.models import AgentError
-from mijia_assistant.capabilities import CapabilityRegistry, FakeWeatherCapability
+from mijia_assistant.capabilities import (
+    CaiyunWeatherCapability,
+    CapabilityRegistry,
+    CurrentDateTimeCapability,
+    FakeWeatherCapability,
+)
+from mijia_assistant.capabilities.weather import amap_signature, caiyun_signature
 from mijia_assistant.conversation import ConversationEngine
 from mijia_assistant.models import (
     AssistantContext,
@@ -113,6 +119,142 @@ def test_missing_weather_location_can_return_clarification_without_tool():
 
     assert result.outcome == "clarification"
     assert weather.calls == 0
+
+
+def test_current_datetime_uses_the_trusted_context_timezone_and_rejects_arguments():
+    capability = CurrentDateTimeCapability()
+    result = asyncio.run(capability.invoke(context(timezone="Asia/Singapore"), {}))
+
+    assert result.client_data["type"] == "datetime"
+    assert result.model_content["timezone"] == "Asia/Singapore"
+    with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
+        asyncio.run(capability.invoke(context(), {"timezone": "UTC"}))
+
+
+def test_caiyun_weather_fetches_and_caches_a_sanitized_snapshot():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.path == "/v3/geocode/geo":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "1",
+                    "geocodes": [
+                        {"location": "116.4074,39.9042", "formatted_address": "上海市长宁区"}
+                    ],
+                },
+            )
+        assert request.url.path == "/v2.6/caiyun-app-key/116.4074,39.9042/weather"
+        assert dict(request.url.params) == {
+            "lang": "zh_CN",
+            "unit": "metric",
+            "alert": "false",
+            "dailysteps": "2",
+        }
+        assert request.headers["x-cy-nonce"].isalnum()
+        assert len(request.headers["x-cy-nonce"]) == 32
+        assert request.headers["x-cy-timestamp"].isdigit()
+        assert request.headers["x-cy-signature"]
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "timezone": "Asia/Shanghai",
+                "server_time": 1790125200,
+                "result": {
+                    "realtime": {
+                        "temperature": 29.1,
+                        "apparent_temperature": 34.0,
+                        "humidity": 0.74,
+                        "skycon": "LIGHT_RAIN",
+                        "wind": {"speed": 12.4},
+                    },
+                    "daily": {
+                        "temperature": [
+                            {"date": "2026-09-23T00:00+08:00", "max": 31.2, "min": 26.1},
+                            {"date": "2026-09-24T00:00+08:00", "max": 32.0, "min": 26.3},
+                        ],
+                        "skycon": [{"value": "LIGHT_RAIN"}, {"value": "CLOUDY"}],
+                        "precipitation": [{"probability": 0.7}, {"probability": 0.4}],
+                    },
+                },
+            },
+        )
+
+    async def execute():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            capability = CaiyunWeatherCapability(
+                client,
+                base_url="https://api.caiyunapp.com",
+                app_key="caiyun-app-key",
+                app_secret="caiyun-app-secret",
+                geocoding_url="https://restapi.amap.com",
+                geocoding_key="amap-key",
+                geocoding_private_key="amap-private-key",
+            )
+            first = await capability.invoke(context(), {"location": "上海市长宁区", "days": 2})
+            second = await capability.invoke(context(), {"location": "上海市长宁区", "days": 2})
+            return first, second
+
+    first, second = asyncio.run(execute())
+    assert len(calls) == 3
+    assert first.client_data["provider"] == "caiyun"
+    assert first.client_data["alertsSupported"] is False
+    assert first.client_data["attributionUrl"] == "https://www.caiyunapp.com/"
+    assert "attribution" not in first.model_content
+    assert "attributionUrl" not in first.model_content
+    assert first.client_data["forecast"][0]["temperatureMax"] == 31.2
+    assert first.client_data["freshness"] == "fresh"
+    assert second.client_data["freshness"] == "cached"
+
+
+def test_caiyun_rejects_coordinates_outside_the_mainland_china_mvp_without_a_request():
+    async def execute():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"status": "1", "geocodes": []})
+            )
+        ) as client:
+            capability = CaiyunWeatherCapability(
+                client,
+                base_url="https://api.caiyunapp.com",
+                app_key="caiyun-app-key",
+                app_secret="caiyun-app-secret",
+                geocoding_url="https://restapi.amap.com",
+                geocoding_key="amap-key",
+                geocoding_private_key="amap-private-key",
+            )
+            return await capability.invoke(context(), {"location": "unknown"})
+
+    result = asyncio.run(execute())
+    assert result.status == "error"
+    assert result.model_content["status"] == "location_unavailable"
+
+
+def test_caiyun_signature_follows_the_documented_sorted_query_contract():
+    signature = caiyun_signature(
+        method="GET",
+        path="/v2.6/your_app_key/116.3176,39.9760/weather",
+        query={"hourlysteps": "24", "alert": "true", "dailysteps": "1"},
+        app_key="your_app_key",
+        app_secret="your_app_secret",
+        nonce="0195c68a-42e7-7243-bff2-ac97a78b837d",
+        timestamp="1742791910",
+    )
+
+    assert signature == "KfHsk3z2XfX6Yxox4Uf_VgyM0wHk6bWEyRqZ9QOJUYw="
+
+
+def test_amap_signature_follows_the_documented_sorted_query_contract():
+    assert (
+        amap_signature(
+            {"f": "8", "a": "23", "d": "48", "c": "67", "b": "12"},
+            "bbbbb",
+        )
+        == "a89e8c2266d888860c46672d77d069f3"
+    )
 
 
 def test_live_read_profile_clarifies_location_without_asking_the_model():

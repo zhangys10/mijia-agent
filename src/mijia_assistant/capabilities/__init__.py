@@ -1,9 +1,12 @@
+from .datetime import CurrentDateTimeCapability
 from .home import DeviceStatusCapability, HomeEnvironmentCapability
 from .registry import CapabilityRegistry
-from .weather import FakeWeatherCapability
+from .weather import CaiyunWeatherCapability, FakeWeatherCapability
 
 __all__ = [
+    "CaiyunWeatherCapability",
     "CapabilityRegistry",
+    "CurrentDateTimeCapability",
     "DeviceStatusCapability",
     "FakeWeatherCapability",
     "HomeEnvironmentCapability",
