@@ -7,11 +7,7 @@ from mijia_assistant.models import AssistantContext, AssistantError, CapabilityR
 
 class _HomeReadCapability:
     risk: Literal["home_read"] = "home_read"
-    input_schema: ClassVar[dict] = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {},
-    }
+    input_schema: ClassVar[dict]
 
     def __init__(self, tools: ConsoleAgentTools):
         self.tools = tools
@@ -26,28 +22,97 @@ class _HomeReadCapability:
         return ctx.automation_token.get_secret_value()
 
     @staticmethod
-    def _validate_empty(args: dict) -> None:
-        if args:
+    def _validate_args(args: dict, allowed: set[str], projection: dict[str, list[str]]) -> dict:
+        if not isinstance(args, dict) or set(args) - allowed:
             raise AssistantError("INVALID_TOOL_ARGUMENTS")
+        normalized = {}
+        for key in allowed:
+            value = args.get(key)
+            if value is None:
+                continue
+            options = projection.get(key, [])
+            limit = min(
+                len(options),
+                40 if key == "kinds" else 20 if key == "rooms" else 9 if key == "metrics" else 3,
+            )
+            if (
+                not isinstance(value, list)
+                or len(value) > limit
+                or any(not isinstance(item, str) or item not in options for item in value)
+            ):
+                raise AssistantError("INVALID_TOOL_ARGUMENTS")
+            normalized[key] = list(dict.fromkeys(value))
+        return normalized
+
+    async def _manifest(self, ctx: AssistantContext, operation: str):
+        try:
+            manifest = await self.tools.capabilities_v1(
+                self._token(ctx), ctx.request_id, ctx.home_selector
+            )
+        except AgentError as error:
+            raise AssistantError(error.code, error.status) from None
+        if not any(item.name == operation and item.available for item in manifest.capabilities):
+            raise AssistantError("AI_CAPABILITY_UNAVAILABLE", 403)
+        projection = manifest.projection.model_dump()
+        return projection
 
 
 class HomeEnvironmentCapability(_HomeReadCapability):
     name = "get_home_environment"
     description = "Read the exposed home's current environmental measurements."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "rooms": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "maxItems": 20,
+            },
+            "metrics": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "temperature",
+                        "humidity",
+                        "co2",
+                        "formaldehyde",
+                        "pm25",
+                        "pm10",
+                        "tvoc",
+                        "pressure",
+                        "battery",
+                    ],
+                },
+                "maxItems": 9,
+            },
+        },
+    }
 
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
-        self._validate_empty(args)
+        projection = await self._manifest(ctx, self.name)
+        filters = self._validate_args(
+            args,
+            {"rooms", "metrics"},
+            {"rooms": projection["rooms"], "metrics": projection["measurementTypes"]},
+        )
         try:
-            status = await self.tools.get_home_status(
-                self._token(ctx), ctx.request_id, ctx.home_selector
+            status = await self.tools.invoke_home_environment(
+                self._token(ctx), ctx.request_id, ctx.home_selector, filters
             )
         except AgentError as error:
             raise AssistantError(error.code, error.status) from None
-        content = status.model_dump(exclude_none=True)
+        content = {
+            "completeness": status.completeness,
+            "availableMetrics": len(status.groups),
+            "capturedAt": status.capturedAt,
+        }
+        display = status.model_dump(exclude_none=True)
         return CapabilityResult(
             status="partial" if status.completeness == "partial" else "success",
             model_content=content,
-            client_data={"type": "home_environment", **content},
+            client_data={"type": "home_environment", **display},
             display_text=(
                 "当前家庭暂无可用的环境读数。"
                 if status.completeness == "empty"
@@ -59,20 +124,56 @@ class HomeEnvironmentCapability(_HomeReadCapability):
 class DeviceStatusCapability(_HomeReadCapability):
     name = "get_device_status"
     description = "Read the exposed home's current per-room device power status."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "rooms": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "maxItems": 20,
+            },
+            "kinds": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 40},
+                "maxItems": 40,
+            },
+            "states": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["on", "off", "unknown"]},
+                "maxItems": 3,
+            },
+        },
+    }
 
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
-        self._validate_empty(args)
+        projection = await self._manifest(ctx, self.name)
+        filters = self._validate_args(
+            args,
+            {"rooms", "kinds", "states"},
+            {
+                "rooms": projection["rooms"],
+                "kinds": projection["deviceKinds"],
+                "states": ["on", "off", "unknown"],
+            },
+        )
         try:
-            status = await self.tools.get_device_status(
-                self._token(ctx), ctx.request_id, ctx.home_selector
+            status = await self.tools.invoke_device_status(
+                self._token(ctx), ctx.request_id, ctx.home_selector, filters
             )
         except AgentError as error:
             raise AssistantError(error.code, error.status) from None
-        content = status.model_dump(exclude_none=True)
+        content = {
+            "completeness": status.completeness,
+            "roomCount": len(status.rooms),
+            "deviceCount": sum(len(room.items) for room in status.rooms),
+            "capturedAt": status.capturedAt,
+        }
+        display = status.model_dump(exclude_none=True)
         return CapabilityResult(
             status="partial" if status.completeness == "partial" else "success",
             model_content=content,
-            client_data={"type": "device_status", **content},
+            client_data={"type": "device_status", **display},
             display_text=(
                 "当前家庭暂无可用的设备状态。"
                 if status.completeness == "empty"
