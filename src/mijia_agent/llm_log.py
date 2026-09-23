@@ -1,10 +1,10 @@
-"""JSONL logging for every model call, for later debugging.
+"""JSONL logging for model calls and tool outcomes, for later debugging.
 
-One line per LLM call: the request payload (messages, tools, params — aliases
-only by construction), a bounded response excerpt, usage, and latency; failures
-log the error code. Gateway credentials are transport headers and never enter
-payloads; bindings, tokens, and Xiaomi secrets never reach the gateway layer,
-so they can never reach these records. Logging failures must never break a turn.
+One line per LLM call contains the request payload (messages, tools, params —
+aliases only by construction), a bounded response excerpt, usage, and latency;
+tool outcomes contain only the tool name and status. Gateway credentials are
+transport headers and never enter payloads; bindings, tokens, and Xiaomi secrets
+never reach these records. Logging failures must never break a turn.
 """
 
 import json
@@ -32,3 +32,11 @@ class LlmCallLogger:
                     self._sink.flush()
         except (OSError, ValueError):
             pass  # A broken log sink must not fail the turn.
+
+    def log_tool_result(
+        self,
+        *,
+        tool_name: str,
+        status: str,
+    ) -> None:
+        self.log({"event": "tool_result", "tool": tool_name, "status": status})

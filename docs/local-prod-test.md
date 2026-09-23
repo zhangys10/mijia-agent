@@ -118,9 +118,10 @@ mijia-agent-local-prod run --keep-log .local-prod/llm-calls.jsonl
 ```
 
 The retained file is set to `0600`, and `.local-prod/` is ignored by Git. Canonical-assistant
-records contain request metadata, tool names, bounded response lengths, usage, and latency; they
-exclude credentials, tokens, prompts, model response text, and private tool results. Delete a
-retained operational log when the investigation is complete.
+records contain request metadata, tool names, bounded response lengths, usage, and latency; tool
+outcomes add only the tool name and status (`success`, `partial`, `error`, or `outcome_unknown`). They exclude credentials, tokens,
+prompts, model response text, and private tool results. Delete a retained operational log when
+the investigation is complete.
 
 ## Scope and expected results
 

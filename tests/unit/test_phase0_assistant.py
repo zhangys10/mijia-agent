@@ -110,6 +110,38 @@ def test_fake_weather_runs_two_model_steps_and_returns_structured_data():
     assert "Singapore" in tool_messages[0].content
 
 
+def test_tool_result_log_records_only_tool_name_and_status():
+    sink = StringIO()
+    weather = FakeWeatherCapability()
+    provider = ScriptedProvider(
+        ModelTurn(
+            tool_calls=[
+                ToolCall(
+                    id="call_weather",
+                    name="get_weather",
+                    arguments={"location": "Shanghai", "days": 1},
+                )
+            ]
+        ),
+        ModelTurn(content="上海天气晴朗。"),
+    )
+    result = run(
+        ConversationEngine(
+            provider,
+            CapabilityRegistry([weather]),
+            tool_result_logger=LlmCallLogger(sink=sink).log_tool_result,
+        ),
+        "上海天气怎么样？",
+    )
+
+    assert result.outcome == "tool_answer"
+    record = json.loads(sink.getvalue().splitlines()[0])
+    assert record["event"] == "tool_result"
+    assert record["tool"] == "get_weather"
+    assert record["status"] == "success"
+    assert set(record) == {"event", "tool", "status", "ts"}
+
+
 def test_missing_weather_location_can_return_clarification_without_tool():
     weather = FakeWeatherCapability()
     provider = ScriptedProvider(
@@ -482,6 +514,18 @@ def test_truncated_tool_follow_up_uses_complete_deterministic_fallback():
     provider = ScriptedProvider(
         ModelTurn(tool_calls=[ToolCall(id="read", name="get_status", arguments={})]),
         ModelTurn(content="未完成", truncated=True),
+    )
+    result = run(ConversationEngine(provider, CapabilityRegistry([ReadWithFallback()])))
+
+    assert result.outcome == "tool_answer"
+    assert result.answer.text == "已读取当前状态。"
+    assert result.data == {"value": 1}
+
+
+def test_empty_tool_follow_up_uses_complete_deterministic_fallback():
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="read", name="get_status", arguments={})]),
+        ModelTurn(content=""),
     )
     result = run(ConversationEngine(provider, CapabilityRegistry([ReadWithFallback()])))
 
