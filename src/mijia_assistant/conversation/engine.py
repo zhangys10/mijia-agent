@@ -245,6 +245,7 @@ class ConversationEngine:
             self.tool_result_logger(tool_name=tool_name, status=status, error_code=error_code)
         except Exception:  # noqa: BLE001 -- logging must never fail a turn.
             return
+
     @staticmethod
     def _tool_error_response(
         ctx: AssistantContext,

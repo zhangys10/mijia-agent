@@ -32,6 +32,7 @@ class LlmCallLogger:
                     self._sink.flush()
         except (OSError, ValueError):
             pass  # A broken log sink must not fail the turn.
+
     def log_tool_result(
         self,
         *,
