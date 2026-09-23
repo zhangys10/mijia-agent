@@ -95,7 +95,9 @@ Both files must be owner-only (`chmod 600`); the CLI refuses group/world-readabl
 and always writes the token file `0600`. The cookie file and the generated token must never
 be committed, put on a command line, or left in shell history. During `run`, the token is
 held only by the parent CLI and sent to the loopback route; it is not added to the child
-environment or Uvicorn argv. Proxy environment variables are disabled for both loopback and
+environment or Uvicorn argv. The canonical assistant forwards that same opaque automation
+token to the production console only after selecting a home-read capability, matching the
+web adapter's production tool envelope. Proxy environment variables are disabled for both loopback and
 production requests so credentials cannot be captured by an inherited HTTP(S) proxy.
 
 Token generation requires the console checkout (default `../mijia-web-console`, override

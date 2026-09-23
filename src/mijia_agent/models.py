@@ -40,6 +40,41 @@ class Turn(StrictModel):
         return value
 
 
+class AssistantTurn(StrictModel):
+    """Canonical assistant turn forwarded by the Makers adapter.
+
+    ``automationToken`` is opaque to Python.  It is only forwarded to the
+    console's read-only tools endpoint after the model selects a home
+    capability.
+    """
+
+    requestId: Annotated[str, Field(min_length=16, max_length=128)]
+    conversationId: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{6,36}$")]
+    principalId: Annotated[str, Field(pattern=r"^usr_[A-Za-z0-9_-]{1,128}$")]
+    homeId: Annotated[str, Field(min_length=1, max_length=100)]
+    message: Annotated[str, Field(min_length=1, max_length=500)]
+    idempotencyKey: Annotated[str, Field(min_length=16, max_length=128)]
+    scopes: list[Literal["ai:chat"]]
+    automationToken: SecretStr
+    locale: Literal["zh-CN", "en-US"] = "zh-CN"
+    timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    history: Annotated[list[Message], Field(max_length=12)] = Field(default_factory=list)
+
+    @field_validator("message")
+    @classmethod
+    def trim_message(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("empty message")
+        return value.strip()
+
+    @field_validator("automationToken")
+    @classmethod
+    def token_size(cls, value: SecretStr) -> SecretStr:
+        if not 1 <= len(value.get_secret_value()) <= 8192:
+            raise ValueError("invalid automation token")
+        return value
+
+
 class Scene(StrictModel):
     alias: Annotated[str, Field(pattern=r"^scene_[a-f0-9]{16}$")]
     name: Annotated[str, Field(min_length=1, max_length=200)]

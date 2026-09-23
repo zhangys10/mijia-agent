@@ -8,7 +8,7 @@ function fixture() {
   const state = new Map();
   const history = new Map();
   const env = { AI_AGENT_INTERNAL_SECRET: "fake-agent-secret-".repeat(3), AI_PYTHON_INTERNAL_SECRET: "fake-python-secret-".repeat(3), AI_TOOLS_INTERNAL_SECRET: "fake-tools-secret-".repeat(3), MIJIA_CONSOLE_BASE_URL: "https://console.example", AI_PYTHON_BASE_URL: "https://python.example" };
-  const context = { env, conversation_id: "conv_test_123", request: { method: "POST", headers: { Authorization: `Bearer ${env.AI_AGENT_INTERNAL_SECRET}` }, body: { requestId: "req_example_000001", principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"], sessionBinding: "opaque-test-binding", message: "查看可用场景", idempotencyKey: "idem_test_example_1" } }, store: {
+  const context = { env, conversation_id: "conv_test_123", request: { method: "POST", headers: { Authorization: `Bearer ${env.AI_AGENT_INTERNAL_SECRET}` }, body: { requestId: "req_example_000001", principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"], automationToken: "opaque-test-token", message: "查看可用场景", idempotencyKey: "idem_test_example_1" } }, store: {
     state: { get: async key => state.get(key) ?? null, set: async (key, value) => state.set(key, value) },
     getMessages: async ({ conversationId }) => history.get(conversationId) ?? [],
     appendMessage: async ({ conversationId, role, content }) => history.set(conversationId, [...(history.get(conversationId) ?? []), { role, content }]),
@@ -29,10 +29,18 @@ test("Makers adapter forwards a bounded turn, stores history, and replays withou
   const { context, history } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) {
+      assert.equal(options.headers["X-Ai-User-Token"], "opaque-test-token");
+      assert.deepEqual(JSON.parse(options.body), {
+        requestId: context.request.body.requestId,
+        tool: "authorize",
+        arguments: {},
+      });
+      return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
+    }
     calls++;
     const body = JSON.parse(options.body);
-    assert.equal(body.sessionBinding, "opaque-test-binding");
+    assert.equal(body.automationToken, "opaque-test-token");
     assert.equal(body.history.length, 0);
     return Response.json({ requestId: body.requestId, conversationId: body.conversationId, message: "场景列表", intent: "list_scenes", usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } });
   });
@@ -51,7 +59,7 @@ test("uncertain upstream outcome never automatically reruns", async t => {
   const { context } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async url => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     calls++;
     throw new Error("timeout with upstream secret");
   });
@@ -64,7 +72,7 @@ test("memory append failure after a successful turn neither fails the reply nor 
   const { context, history } = fixture();
   let appendCalls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "conv_test_123", message: "回复", intent: "none" });
   });
   const original = context.store.appendMessage;
@@ -87,7 +95,7 @@ test("unparseable upstream body is a finalized 502 that replays as 502, not 409"
   const { context, state, history } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async url => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     calls++;
     // Runtime error pages (e.g. module load failure) arrive as HTML with a 404/502.
     return new Response("<html>Error loading module</html>", { status: 404 });
@@ -110,7 +118,7 @@ test("confirmed 200 with a broken response contract stays uncertain and never re
   const { context } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     calls++;
     // 200 whose conversationId does not match ours: the turn ran upstream, its outcome is unreadable.
     return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "cv_someone_else", message: "回复" });
@@ -125,7 +133,7 @@ test("failed upstream status with a broken body finalizes as 502 and replays", a
   const { context } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     calls++;
     return new Response("upstream exploded", { status: 500 });
   });
@@ -145,7 +153,7 @@ test("structured homeStatus survives forwarding, receipt storage, and replay wit
   };
   const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭环境状态。", intent: "get_home_status", homeStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
   });
   const first = await (await onRequest(context)).json();
@@ -170,7 +178,7 @@ test("structured deviceStatus survives forwarding, receipt storage, and replay w
   };
   const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭设备状态。", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
   t.mock.method(globalThis, "fetch", async (url, options) => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
   });
   const first = await (await onRequest(context)).json();
@@ -188,7 +196,7 @@ test("finalized upstream failure replay retains known model usage", async t => {
   const { context, history } = fixture();
   let calls = 0;
   t.mock.method(globalThis, "fetch", async url => {
-    if (url.includes("console.example")) return Response.json({ ok: true });
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     calls++;
     return Response.json({
       code: "AI_GATEWAY_RATE_LIMITED",
@@ -218,7 +226,7 @@ test("failed binding authorization prevents memory reads", async t => {
 test("delete of absent history is idempotent and keeps receipts", async t => {
   const { context, state } = fixture();
   state.set("receipt", { status: "uncertain" });
-  t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true }));
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] }));
   const response = await (await deleteConversation(context)).json();
   assert.equal(response.ok, true);
   assert.equal(response.deleted, false);
@@ -231,7 +239,7 @@ test("delete removes only this principal's scoped history and repeats idempotent
   const other = `agent_${(await digest("conv_test_123:usr_intruder:home-test")).slice(0, 24)}`;
   history.set(scoped, [{ role: "user", content: "查看可用场景" }]);
   history.set(other, [{ role: "user", content: "别的用户" }]);
-  t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true }));
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] }));
   const first = await (await deleteConversation(context)).json();
   assert.equal(first.ok, true);
   assert.equal(first.deleted, true);

@@ -43,9 +43,11 @@ Inject configuration through your shell or deployment secret manager, following
 uvicorn mijia_agent.app:create_app --factory --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-The Python endpoint is `POST /internal/v1/turn`, authenticated with a dedicated
-server secret. It is not a browser or Siri endpoint. It must only be called by
-the Makers adapter after the web console has authenticated the user and reserved quota.
+The canonical Python endpoint is `POST /internal/v1/assistant`, authenticated with a
+dedicated server secret. It is not a browser or Siri endpoint. It must only be called by
+the Makers adapter after the web console has authenticated the user and re-derived the
+token-bound principal/home context. The older `/internal/v1/turn` binding route is
+legacy-only and must not receive new assistant behavior.
 `GET /healthz` is a liveness check, not proof that Gateway or console access works.
 
 ### Local agent with production services

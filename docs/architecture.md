@@ -34,13 +34,13 @@ authorization and discovery only; activation returns `AI_SCENE_EXECUTION_DISABLE
 
 The existing console derives `usr_` + Base64URL(HMAC-SHA256(secret, `xiaomi:` + userId)).
 It validates current home access, issues scoped conversation handles, reserves quota,
-and sends a short-lived sealed binding to the Makers entrypoint. The binding remains
+and sends a short-lived sealed automation token to the Makers entrypoint. The token remains
 opaque in both the adapter and Python. Only the console tools API can decrypt it.
 
 Each adapter request authenticates the console using `AI_AGENT_INTERNAL_SECRET`,
-then calls the console's `authorize` operation with `AI_TOOLS_INTERNAL_SECRET` to
-validate binding and current home membership before touching memory. Python accepts
-only `AI_PYTHON_INTERNAL_SECRET`; it passes the binding to the console, never the model.
+then calls the console's `authorize` operation with `AI_TOOLS_INTERNAL_SECRET` and the
+same automation token to validate current home membership before touching memory. Python
+accepts only `AI_PYTHON_INTERNAL_SECRET`; it passes the token to the console, never the model.
 
 These three secrets are server-only and independently rotated. Model requests contain
 only user text, bounded history, locale/timezone, and sanitized scene summaries.
@@ -70,7 +70,8 @@ Its Cloud Function entry
 `cloud-functions/api/index.py` directly constructs `app = FastAPI(...)`—the entry marker
 Tencent documents for ASGI routing—then registers the shared lifespan and routes. It
 exposes the ASGI application at the external `/api` prefix; EdgeOne removes that prefix
-before dispatch, so FastAPI continues to declare `/healthz` and `/internal/v1/turn`.
+before dispatch, so FastAPI continues to declare `/healthz` and the canonical
+`/internal/v1/assistant` route. `/internal/v1/turn` remains legacy-only.
 `src/mijia_agent` remains the canonical source and is copied into the Cloud Functions
 build tree by `npm run build --prefix adapters/edgeone`. EdgeOne's generated runtime
 imports route entries with the Cloud Functions output root on `sys.path`, so the entry
@@ -86,8 +87,9 @@ is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 
 Only `list_scenes`, `get_home_status`, `get_device_status`, and `activate_scene` are
 recognized. Additional arguments, multiple tool calls, unknown aliases and invented tools
-fail closed. Activation also
-requires `scene:activate` and a conservative explicit-current-command check in Python.
+fail closed. Phase 1 registers only read capabilities. A future activation also requires a
+server-derived `scene:activate` scope, exposure/revision checks, a conservative
+explicit-current-command check, and the console-owned durable action claim.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
 environment snapshot from the console tools API only after the model selects the tool,
 returns it as the structured `Result.homeStatus` field, and keeps measurements out of

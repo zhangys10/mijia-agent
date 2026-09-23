@@ -93,8 +93,8 @@ curl -fsS "https://<makers-host>/api/healthz"
 ```
 
 Expected response: `200 {"status":"ok"}`. External `/api/healthz` maps to FastAPI `/healthz`
-because EdgeOne strips `/api`. Likewise, external `/api/internal/v1/turn` maps to
-`/internal/v1/turn`. Verify the turn route rejects a missing or invalid
+because EdgeOne strips `/api`. Likewise, canonical external `/api/internal/v1/assistant` maps to
+`/internal/v1/assistant`. Verify the canonical route rejects a missing or invalid
 `AI_PYTHON_INTERNAL_SECRET`; do not place a real token directly in command history.
 
 From the deployed Python function, make one bounded, non-tool Gateway request and confirm the
@@ -133,7 +133,8 @@ After section 5 is configured:
    read quota, delete the conversation, then verify the same handle starts with empty Agent
    memory. Both chat and quota API must report disabled quota with null counters.
 4. With principal B, verify A's handle is rejected and A's catalog/history cannot be read.
-5. Verify a request without a client idempotency key receives only read-only scope.
+5. Verify every Phase 1 Web request receives only `ai:chat`; a client idempotency key is a
+   receipt identity and must not create an action scope.
 6. Verify the public response contains only opaque IDs, safe text, scene display metadata and
    disabled quota fields. Inspect configured redacted logs for the same boundary.
 7. Verify chat produces one Agent turn only, `GET /api/ai/quota` makes no adapter request, and

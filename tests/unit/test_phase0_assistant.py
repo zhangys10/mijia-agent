@@ -658,6 +658,44 @@ def test_canonical_ingress_authenticates_token_before_model_call():
     assert provider.requests == []
 
 
+def test_internal_canonical_ingress_accepts_only_the_automation_token_envelope():
+    provider = ScriptedProvider(ModelTurn(content="A direct answer."))
+    app = create_app(
+        app_settings(),
+        service=object(),
+        command_service=object(),
+        assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
+        assistant_tools=object(),
+    )
+    body = {
+        "requestId": "req_canonical_internal_000001",
+        "conversationId": "conv_canonical_001",
+        "principalId": "usr_canonical_test",
+        "homeId": "home-canonical",
+        "message": "你好",
+        "idempotencyKey": "idem_canonical_internal_000001",
+        "scopes": ["ai:chat"],
+        "automationToken": "opaque-automation-token",
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/v1/assistant",
+            headers={"Authorization": "Bearer " + app_settings().internal_secret},
+            json=body,
+        )
+        legacy_envelope = client.post(
+            "/internal/v1/assistant",
+            headers={"Authorization": "Bearer " + app_settings().internal_secret},
+            json={key: value for key, value in body.items() if key != "automationToken"}
+            | {"sessionBinding": "legacy-binding"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "A direct answer."
+    assert legacy_envelope.status_code == 400
+    assert legacy_envelope.json()["code"] == "AI_INVALID_REQUEST"
+
+
 def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
     provider = ScriptedProvider(ModelTurn(content="上海市目前没有配置可用的天气数据源。"))
 

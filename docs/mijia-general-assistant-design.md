@@ -671,12 +671,50 @@ Phase 0 CLI acceptance requires all of the following:
 
 The console is already the correct trust boundary for Xiaomi access. It owns Xiaomi sessions, derives the principal, verifies current home membership, maps opaque scene aliases, and sanitizes home state. The agent should not duplicate any of those responsibilities.
 
-The current implementation is a strong starting point, not the finished assistant contract. `POST /api/ai/tools` is a fixed dispatch switch with two authenticated request envelopes:
+The current implementation is a strong starting point, not the finished assistant contract. The retiring `POST /api/ai/tools` dispatch switch has two authenticated request envelopes:
 
 - a service request carrying a verified session binding, principal, home, and scopes; or
 - a service request plus `X-Ai-User-Token`, from which the console derives the principal and resolves the permitted home.
 
-Both paths correctly keep Xiaomi credentials inside the console. They also enforce a 32 KiB body limit, strict arguments, `Cache-Control: no-store`, redacted errors, and a fresh home-membership check. Those properties should be retained.
+Both paths correctly keep Xiaomi credentials inside the console. They also enforce a 32 KiB body limit, strict arguments, `Cache-Control: no-store`, redacted errors, and a fresh home-membership check. Those properties should be retained. Phase 1 canonical Web, Siri, and local production testing standardize on the automation-token envelope; the session-binding path is legacy-only and receives no new assistant behavior.
+
+### 15.0 Phase 1 canonical context and follow-on gates
+
+The canonical Phase 1 flow is deliberately read-only:
+
+```text
+authenticated Web/Siri ingress
+  -> short-lived opaque automation token
+  -> Makers adapter authorize(token)
+  -> console re-derives principal and home
+  -> adapter compares trusted context before loading history
+  -> Python capability loop
+  -> console is called with the same token only for a selected home read
+```
+
+The token, Xiaomi session, principal/home identifiers, and tool responses are never model
+input or normal logs. The token payload's identity fields are not authoritative: only the
+console's fresh `authorize` result may establish the adapter's principal/home context.
+
+`idempotencyKey` is a request/receipt identity, not permission. It may support duplicate
+read replay today, but it must never make an untrusted client eligible for `scene:activate`.
+Phase 1 therefore exposes only `ai:chat`, and it registers no physical-write capability.
+
+Subsequent work must preserve this sequence:
+
+1. **Home-read maturity:** add the versioned manifest and filtered read APIs below, plus
+   explicit home-level exposure policy. Keep the automation-token envelope; do not revive
+   session binding as a second canonical path.
+2. **Action prerequisites:** add reviewed scene aliases, exposure and scene revisions, risk
+   classification, explicit confirmation where required, and a console-owned durable Blob
+   action ledger. The ledger claim must use principal, home, idempotency key, canonical action
+   hash, and revision; it must be atomically created before Xiaomi dispatch.
+3. **Action registration:** only after the prerequisites have deployed and concurrency-tested,
+   let the console issue/confirm an action scope from trusted context. The adapter/Python must
+   still treat that scope as server-derived and must allow one terminal write with no retry.
+4. **Legacy retirement:** move every remaining caller to the canonical token envelope, observe
+   zero session-binding traffic for the agreed window, then delete the session-binding route,
+   schemas, tests, and deployment configuration together. Do not keep fallback behavior.
 
 ### 15.1 Current API inventory
 
@@ -703,14 +741,14 @@ The environment collector already has several desirable semantics: it reads publ
 
 ### 15.3 Recommended versioned internal API
 
-Because migration compatibility is not required, add a versioned assistant API and keep the existing route unchanged until its callers are retired:
+Because migration compatibility is not required, add a versioned assistant API and retire the existing route after its callers are moved:
 
 ```text
 POST /api/internal/assistant/v1/capabilities
 POST /api/internal/assistant/v1/tools:invoke
 ```
 
-Both endpoints resolve either supported authentication envelope into one internal `ResolvedHomeContext`. This context—not model input—contains the principal, selected home, scopes, preview mode, exposure revision, and authorization expiry.
+Both endpoints resolve the canonical automation-token envelope into one internal `ResolvedHomeContext`. This context—not model input—contains the principal, selected home, scopes, preview mode, exposure revision, and authorization expiry. Do not add a second runtime path merely to preserve session-binding compatibility.
 
 `capabilities` returns a bounded, sanitized manifest such as:
 

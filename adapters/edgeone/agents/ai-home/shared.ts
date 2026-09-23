@@ -51,20 +51,29 @@ export async function authorize(context: Context) {
   const principalId = required(body.principalId);
   const homeId = required(body.homeId, 100);
   const requestId = required(body.requestId);
-  const sessionBinding = required(body.sessionBinding, 16384);
+  const automationToken = required(body.automationToken, 8192);
   const scopes = body.scopes;
-  if (!Array.isArray(scopes) || !scopes.includes("ai:chat") || scopes.some(x => !["ai:chat", "scene:activate"].includes(x))) throw new Error("AI_INVALID_REQUEST");
+  if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== "ai:chat") throw new Error("AI_INVALID_REQUEST");
   const toolSecret = context.env.AI_TOOLS_INTERNAL_SECRET;
   if (!toolSecret || toolSecret.length < 32) throw new Error("AI_AGENT_UNAVAILABLE");
-  // Only the console has Xiaomi encryption keys. Validate before reading or deleting memory.
+  // The console alone opens the opaque automation token.  This is deliberately
+  // the same envelope used by the local production harness, not a parallel
+  // session-binding path.
   const verified = await fetch(serviceUrl(context.env.MIJIA_CONSOLE_BASE_URL, "/api/ai/tools", context.env.AI_ENVIRONMENT === "development"), {
     method: "POST", redirect: "error", signal: AbortSignal.timeout(15000),
-    headers: { Authorization: `Bearer ${toolSecret}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ principalId, homeId, requestId, sessionBinding, scopes, tool: "authorize", arguments: {} }),
+    headers: { Authorization: `Bearer ${toolSecret}`, "Content-Type": "application/json", "X-Ai-User-Token": automationToken },
+    body: JSON.stringify({ requestId, tool: "authorize", arguments: {} }),
   });
-  if (!verified.ok) throw new Error("AI_UNAUTHENTICATED");
+  let authorization: Record<string, unknown> | undefined;
+  try { authorization = await verified.json() as Record<string, unknown>; } catch { /* sanitized below */ }
+  if (
+    !verified.ok || authorization?.ok !== true
+    || authorization.principalId !== principalId
+    || authorization.homeId !== homeId
+    || JSON.stringify(authorization.scopes) !== JSON.stringify(scopes)
+  ) throw new Error("AI_UNAUTHENTICATED");
   const scopedId = `agent_${(await digest(`${conversationId}:${principalId}:${homeId}`)).slice(0, 24)}`;
-  return { body, conversationId, scopedId, principalId, homeId, requestId, sessionBinding, scopes, store: context.store };
+  return { body, conversationId, scopedId, principalId, homeId, requestId, automationToken, scopes, store: context.store };
 }
 
 export function failure(error: unknown) {

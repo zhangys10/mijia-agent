@@ -8,6 +8,7 @@
 | `AI_QUOTA_*`, KV binding | Yes (`AI_QUOTA_ENABLED=false` defers enforcement in remote mode too) | No | No |
 | `AI_AGENT_BASE_URL` | New adapter's HTTPS origin | No | No |
 | `AI_AGENT_INTERNAL_SECRET` | Sends | Verifies | No |
+| `AI_AUTOMATION_TOKEN_SECRET` | Issues and verifies short-lived Web/Siri automation tokens | No | No |
 | `MIJIA_CONSOLE_BASE_URL` | No | Uses | Uses |
 | `AI_TOOLS_INTERNAL_SECRET` | Verifies | Sends | Sends |
 | `AI_PYTHON_BASE_URL` | No | Uses (`https://<makers-host>/api`) | No |
@@ -47,7 +48,7 @@ the [M1 deployment runbook](./m1-deployment-runbook.md).
    `edgeone.json`, `agents/`, and `cloud-functions/` together. Configure Python's
    environment variables on `cloud-functions/api`, including Gateway credentials.
 4. Verify Agents capability, routing, `context.store`, cancellation, `/api/healthz`,
-   and `/api/internal/v1/turn` ingress controls.
+   and `/api/internal/v1/assistant` ingress controls.
 5. Test console→adapter→Python→Gateway and Python→console discovery with fake/low-risk data.
 6. Set console `AI_AGENT_BASE_URL` to the new Makers origin. Keep the console's legacy
    `/api/ai/command` route retired (phase 3: it answers `410 AI_COMMAND_RETIRED`) and old
@@ -57,10 +58,21 @@ the [M1 deployment runbook](./m1-deployment-runbook.md).
    protection in this mode.
 7. Complete execution/state/quota gates in TODO.md before any production cutover.
 
+### Canonical token-envelope rollout
+
+Deploy the Web console and Makers adapter changes as one coordinated release. The Web console
+now sends `automationToken`, and the adapter rejects the retiring `sessionBinding` field; a
+partially deployed pair therefore fails closed with `AI_INVALID_REQUEST` rather than using a
+second authorization path. Ensure the console has `AI_AUTOMATION_TOKEN_SECRET` before rollout,
+then verify a read-only home question produces a successful `authorize` tool call followed by
+the selected home-read tool. Python receives the opaque token only through the adapter and
+never logs it or sends it to the model.
+
 ## EdgeOne Cloud Functions
 
 The Python service is deployed through `cloud-functions/api/index.py` as an ASGI
-FastAPI application. External routes are `/api/healthz` and `/api/internal/v1/turn`;
+FastAPI application. Canonical external routes are `/api/healthz` and
+`/api/internal/v1/assistant`;
 EdgeOne strips `/api` before dispatch, so the Python routes stay unchanged. Set the
 adapter's `AI_PYTHON_BASE_URL` to `https://<makers-host>/api`.
 
