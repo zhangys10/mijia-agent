@@ -191,7 +191,6 @@ class ConversationEngine:
                         ctx, events, usage, client_data, "TOOL_FAILED", call.name
                     )
                 events.append(ToolEvent(name=call.name, status=result.status))
-                self._log_tool_result(call.name, result.status)
                 if result.client_data is not None:
                     client_data = result.client_data
                 if result.display_text:
