@@ -30,6 +30,14 @@ class Settings:
     timeout_ms: int = 5000
     max_output_tokens: int = 256
     assistant_max_output_tokens: int = 512
+    caiyun_base_url: str = ""
+    caiyun_app_key: str = field(repr=False, default="")
+    caiyun_app_secret: str = field(repr=False, default="")
+    amap_base_url: str = ""
+    amap_api_key: str = field(repr=False, default="")
+    amap_private_key: str = field(repr=False, default="")
+    weather_timeout_ms: int = 3000
+    weather_cache_ttl_seconds: int = 300
     environment: str = "production"
     llm_log_path: str = field(repr=False, default="")
     legacy_router_enabled: bool = False
@@ -49,10 +57,24 @@ class Settings:
             not 1 <= self.timeout_ms <= 60000
             or not 1 <= self.max_output_tokens <= 4096
             or not 1 <= self.assistant_max_output_tokens <= 4096
+            or not 100 <= self.weather_timeout_ms <= 3000
+            or not 60 <= self.weather_cache_ttl_seconds <= 600
         ):
-            raise ValueError("Invalid Gateway timeout or token limit")
+            raise ValueError("Invalid timeout, token limit, or weather cache configuration")
         endpoint(self.gateway_url, self.environment == "development")
         endpoint(self.console_url, self.environment == "development")
+        if bool(self.caiyun_base_url) != bool(self.caiyun_app_key) or bool(
+            self.caiyun_base_url
+        ) != bool(self.caiyun_app_secret):
+            raise ValueError("Caiyun base URL, App Key, and App Secret must be configured together")
+        if self.caiyun_base_url:
+            endpoint(self.caiyun_base_url, self.environment == "development")
+        if bool(self.amap_base_url) != bool(self.amap_api_key) or bool(self.amap_base_url) != bool(
+            self.amap_private_key
+        ):
+            raise ValueError("Amap base URL, API key, and private key must be configured together")
+        if self.amap_base_url:
+            endpoint(self.amap_base_url, self.environment == "development")
 
     @classmethod
     def from_env(cls, env=None):
@@ -74,6 +96,14 @@ class Settings:
             timeout_ms=int(env.get("AI_GATEWAY_TIMEOUT_MS", "5000")),
             max_output_tokens=int(env.get("AI_GATEWAY_MAX_OUTPUT_TOKENS", "256")),
             assistant_max_output_tokens=int(env.get("AI_ASSISTANT_MAX_OUTPUT_TOKENS", "512")),
+            caiyun_base_url=env.get("AI_CAIYUN_BASE_URL", ""),
+            caiyun_app_key=env.get("AI_CAIYUN_APP_KEY", ""),
+            caiyun_app_secret=env.get("AI_CAIYUN_APP_SECRET", ""),
+            amap_base_url=env.get("AI_AMAP_BASE_URL", ""),
+            amap_api_key=env.get("AI_AMAP_API_KEY", ""),
+            amap_private_key=env.get("AI_AMAP_PRIVATE_KEY", ""),
+            weather_timeout_ms=int(env.get("AI_WEATHER_TIMEOUT_MS", "3000")),
+            weather_cache_ttl_seconds=int(env.get("AI_WEATHER_CACHE_TTL_SECONDS", "300")),
             environment=env.get("AI_ENVIRONMENT", "production"),
             llm_log_path=env.get("AI_LLM_LOG_PATH", ""),
             legacy_router_enabled=env.get("AI_LEGACY_ROUTER_ENABLED", "false").lower()

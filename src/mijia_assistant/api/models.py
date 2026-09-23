@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator
 
@@ -19,6 +20,15 @@ class AssistantRequest(StrictModel):
         value = value.strip()
         if not value:
             raise ValueError("empty text")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            raise ValueError("invalid timezone") from None
         return value
 
 
