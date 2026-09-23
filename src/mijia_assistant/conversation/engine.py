@@ -144,6 +144,11 @@ class ConversationEngine:
                         capability.invoke(ctx, call.arguments),
                         timeout=self._remaining_seconds(ctx),
                     )
+                except AssistantError as error:
+                    events.append(ToolEvent(name=call.name, status="error"))
+                    return self._tool_error_response(
+                        ctx, events, usage, client_data, error.code, call.name
+                    )
                 except asyncio.TimeoutError:
                     if self._is_write(capability.risk):
                         events.append(ToolEvent(name=call.name, status="outcome_unknown"))
@@ -158,12 +163,25 @@ class ConversationEngine:
                             tool_events=events,
                             usage=usage,
                         )
-                    raise AssistantError("DEADLINE_EXCEEDED", 504) from None
+                    events.append(ToolEvent(name=call.name, status="error"))
+                    return self._tool_error_response(
+                        ctx, events, usage, client_data, "DEADLINE_EXCEEDED", call.name
+                    )
                 events.append(ToolEvent(name=call.name, status=result.status))
                 if result.client_data is not None:
                     client_data = result.client_data
                 if result.display_text:
                     fallback_text = result.display_text
+                if result.status == "error":
+                    detail = result.model_content if isinstance(result.model_content, dict) else {}
+                    return self._tool_error_response(
+                        ctx,
+                        events,
+                        usage,
+                        client_data,
+                        str(detail.get("status", "TOOL_FAILED")),
+                        call.name,
+                    )
                 if self._is_write(capability.risk) or result.is_terminal:
                     outcome = (
                         "outcome_unknown" if result.status == "outcome_unknown" else "action_result"
@@ -192,6 +210,50 @@ class ConversationEngine:
             await asyncio.sleep(0)
 
         raise AssistantError("MODEL_ITERATION_LIMIT", 502)
+
+    @staticmethod
+    def _tool_error_response(
+        ctx: AssistantContext,
+        events: list[ToolEvent],
+        usage: Usage,
+        client_data: dict | None,
+        code: str,
+        tool_name: str,
+    ) -> AssistantResponse:
+        chinese = ctx.locale.startswith("zh")
+        weather = tool_name == "get_weather"
+        messages = {
+            "location_unavailable": (
+                "抱歉，这个地点的天气暂时查询不到，请稍后再试。"
+                if chinese and weather
+                else "Sorry, weather for that location is temporarily unavailable. Please try again later."
+            ),
+            "DEADLINE_EXCEEDED": (
+                "天气服务响应超时，请稍后再试。"
+                if chinese and weather
+                else "The weather service timed out. Please try again later."
+            ),
+        }
+        fallback = messages.get(code) if weather else None
+        fallback = fallback or (
+            ("天气服务暂时不可用，请稍后再试。" if weather else "查询暂时无法完成，请稍后再试。")
+            if chinese
+            else (
+                "The weather service is temporarily unavailable. Please try again later."
+                if weather
+                else "The request could not be completed. Please try again later."
+            )
+        )
+        return AssistantResponse(
+            request_id=ctx.request_id,
+            conversation_id=ctx.conversation_id,
+            status="completed",
+            outcome="tool_answer",
+            answer=Answer(text=fallback),
+            data=client_data,
+            tool_events=events,
+            usage=usage,
+        )
 
     @staticmethod
     def _remaining_seconds(ctx: AssistantContext) -> float:

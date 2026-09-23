@@ -19,7 +19,7 @@ from mijia_assistant.capabilities import (
     HomeEnvironmentCapability,
 )
 from mijia_assistant.conversation import ConversationEngine, ConversationRepository
-from mijia_assistant.models import AssistantContext, AssistantError
+from mijia_assistant.models import AssistantContext, AssistantError, ModelMessage
 from mijia_assistant.providers import OpenAICompatibleProvider
 
 from .command_console import ConsoleAgentTools
@@ -292,6 +292,83 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
         except AgentError as error:
             return JSONResponse(
                 {"code": error.code, "requestId": request_id}, error.status, headers=headers
+            )
+        except Exception:  # noqa: BLE001 -- redact provider and credential failures.
+            return JSONResponse(
+                {"code": "AI_AGENT_UNAVAILABLE", "requestId": request_id},
+                502,
+                headers=headers,
+            )
+
+    @app.post("/internal/v1/assistant")
+    async def assistant_internal(request: Request):
+        headers = {"Cache-Control": "no-store"}
+        expected = "Bearer " + config.internal_secret
+        if not hmac.compare_digest(
+            request.headers.get("authorization", "").encode(), expected.encode()
+        ):
+            return JSONResponse({"code": "AI_UNAUTHENTICATED"}, 401, headers=headers)
+        request_id = None
+        try:
+            raw = bytearray()
+            async for chunk in request.stream():
+                raw.extend(chunk)
+                if len(raw) > 65536:
+                    raise AgentError("AI_INVALID_REQUEST", 400)
+            turn = Turn.model_validate(json.loads(raw))
+            request_id = turn.requestId
+            context = AssistantContext(
+                request_id=turn.requestId,
+                conversation_id=turn.conversationId,
+                locale=turn.locale,
+                timezone=turn.timezone,
+                scopes=frozenset(turn.scopes),
+                deadline=datetime.now(timezone.utc) + timedelta(seconds=20),
+                principal_ref=turn.principalId,
+                home_ref=turn.homeId,
+                home_selector=turn.homeId,
+                automation_token=turn.sessionBinding,
+            )
+            history = [ModelMessage(role=item.role, content=item.content) for item in turn.history]
+            result = await app.state.assistant_engine.run(context, turn.message, history)
+            await app.state.conversation_repository.append(context, turn.message, result)
+            event = next((item for item in result.tool_events if item.status == "success"), None)
+            intent = (
+                {
+                    "get_home_environment": "get_home_status",
+                    "get_device_status": "get_device_status",
+                }.get(event.name, "none")
+                if event
+                else "none"
+            )
+            body = {
+                "requestId": result.request_id,
+                "conversationId": result.conversation_id,
+                "message": result.answer.text,
+                "intent": intent,
+                "usage": {
+                    "promptTokens": result.usage.prompt_tokens,
+                    "completionTokens": result.usage.completion_tokens,
+                    "totalTokens": result.usage.total_tokens,
+                    "estimated": result.usage.estimated,
+                },
+            }
+            return JSONResponse(body, headers=headers)
+        except (ValueError, ValidationError):
+            return JSONResponse(
+                {"code": "AI_INVALID_REQUEST", "requestId": request_id},
+                400,
+                headers=headers,
+            )
+        except AssistantError as error:
+            return JSONResponse(
+                {
+                    "code": error.code,
+                    "message": "AI 助手暂时无法完成请求，请稍后再试。",
+                    "requestId": request_id,
+                },
+                error.status,
+                headers=headers,
             )
         except Exception:  # noqa: BLE001 -- redact provider and credential failures.
             return JSONResponse(
