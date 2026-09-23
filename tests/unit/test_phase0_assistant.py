@@ -142,6 +142,22 @@ def test_tool_result_log_records_only_tool_name_and_status():
     assert set(record) == {"event", "tool", "status", "ts"}
 
 
+def test_failed_tool_result_log_adds_only_safe_error_code():
+    sink = StringIO()
+    LlmCallLogger(sink=sink).log_tool_result(
+        tool_name="get_home_environment", status="error", error_code="MI_CLOUD_ERROR"
+    )
+
+    record = json.loads(sink.getvalue().splitlines()[0])
+    assert record == {
+        "event": "tool_result",
+        "tool": "get_home_environment",
+        "status": "error",
+        "errorCode": "MI_CLOUD_ERROR",
+        "ts": record["ts"],
+    }
+
+
 def test_missing_weather_location_can_return_clarification_without_tool():
     weather = FakeWeatherCapability()
     provider = ScriptedProvider(
