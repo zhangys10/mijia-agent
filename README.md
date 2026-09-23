@@ -4,7 +4,7 @@ Python agent development extracted from `zhangys10/mijia-web-console`.
 This repository owns model integration, intent handling, controlled tool calls,
 and future reminder/preference features. Xiaomi protocol code stays in the web console.
 
-**Status: tested initial extraction, not a production cutover.** The Python core,
+**Status: Phase 0 general-assistant spike implemented; not a production cutover.** The Python core,
 Makers adapter, CI, and companion web-console patch are present. The new console
 tool boundary supports authorization and scene discovery. Remote physical execution
 is deliberately disabled until durable executor idempotency is implemented.
@@ -16,6 +16,7 @@ No live deployment, model invocation, or device control was performed during ext
 2. [Service contracts](docs/contracts.md)
 3. [Deployment and rollback](docs/deployment.md)
 4. [Steward report alignment](docs/steward-report-alignment.md)
+5. [Phase 0 implementation and validation](docs/phase-0-implementation.md)
 
 The three original AI design documents are preserved in `docs/source-snapshot/`.
 They describe the TypeScript baseline; the documents above supersede their repo
@@ -58,6 +59,7 @@ that it targets the HTTPS production console and inspect the redacted target:
 
 ```bash
 mijia-agent-local-prod check
+mijia-agent-local-prod smoke --profile fake
 ```
 
 Then run an interactive session — the CLI generates the automation token from your pasted
@@ -65,9 +67,14 @@ Then run an interactive session — the CLI generates the automation token from 
 `token` to paste a ready-made one:
 
 ```bash
-mijia-agent-local-prod run
-mijia-agent-local-prod run --message '我还没回家'
+mijia-agent-local-prod run --profile live-read
+mijia-agent-local-prod run --profile live-read --message '客厅温度是多少？'
 ```
+
+The fake profile is local-only and needs no credentials or network. The live-read profile calls
+the canonical `POST /ai/assistant` endpoint and never registers physical-write capabilities. The
+old `/ai/command` router is disabled by default for environment-loaded deployments; temporary
+rollback access requires `AI_LEGACY_ROUTER_ENABLED=true` and emits deprecation traffic telemetry.
 
 The CLI starts the real ASGI app on loopback and shuts it down on exit. See
 [the live test guide](docs/local-prod-test.md) for cookie/token files, retained logs,
@@ -86,7 +93,7 @@ npm test --prefix adapters/edgeone
 ```
 
 The adapter has no npm dependencies. `npm run build --prefix adapters/edgeone`
-syncs `src/mijia_agent` into the Cloud Functions build tree; deploy with the EdgeOne
+syncs `src/mijia_agent` and `src/mijia_assistant` into the Cloud Functions build tree; deploy with the EdgeOne
 Makers project rooted at `adapters/edgeone`. That root contains both platform markers:
 `edgeone.json` plus `agents/` for Agent routes, and `cloud-functions/` for Python.
 The Cloud Function is exposed as `/api`, and EdgeOne strips that prefix before invoking
@@ -99,6 +106,7 @@ Python remains unable to access EdgeOne KV.
 | Path | Responsibility |
 |---|---|
 | `src/mijia_agent/` | Python HTTP boundary, Gateway, tools client, agent service |
+| `src/mijia_assistant/` | Capability-neutral conversation engine and provider/tool contracts |
 | `adapters/edgeone/` | Makers runtime, memory/lifecycle adapter, and Python Cloud Function entry |
 | `tests/` | Credential isolation, unsafe intent, tool and HTTP contract tests |
 | `integration/*.patch` | Companion patches against PR #31's pinned head |

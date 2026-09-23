@@ -6,6 +6,7 @@ production console's execution policy.
 """
 
 import argparse
+import asyncio
 import errno
 import getpass
 import ipaddress
@@ -21,10 +22,22 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+
+from mijia_assistant.api import AssistantRequest
+from mijia_assistant.capabilities import CapabilityRegistry, FakeWeatherCapability
+from mijia_assistant.conversation import ConversationEngine
+from mijia_assistant.models import (
+    AssistantContext,
+    AssistantError,
+    ModelMessage,
+    ModelTurn,
+    ToolCall,
+)
 
 from .command_models import (
     MAX_AUTOMATION_TOKEN,
@@ -54,6 +67,7 @@ AGENT_ENV_NAMES = {
     "AI_GATEWAY_ALLOWED_MODELS",
     "AI_GATEWAY_TIMEOUT_MS",
     "AI_GATEWAY_MAX_OUTPUT_TOKENS",
+    "AI_ASSISTANT_MAX_OUTPUT_TOKENS",
     "AI_ENVIRONMENT",
     "AI_LLM_LOG_PATH",
 }
@@ -469,6 +483,238 @@ def send_command(
     return body, key
 
 
+def assistant_payload(
+    text: str, conversation_id: str | None, home: str | None, channel: str = "web"
+) -> dict:
+    try:
+        request = AssistantRequest.model_validate(
+            {
+                "text": text,
+                "conversationId": conversation_id,
+                "home": home,
+                "channel": channel,
+            }
+        )
+    except ValueError as error:
+        raise CliError("Prompt, home, or conversation identifier is invalid") from error
+    return request.model_dump(exclude_none=True)
+
+
+def send_assistant(
+    client: httpx.Client,
+    base_url: str,
+    token: str,
+    text: str,
+    conversation_id: str | None,
+    home: str | None,
+) -> tuple[dict, str]:
+    key = "local-prod-" + secrets.token_hex(16)
+    print(f"Request-Key: {key}")
+    try:
+        response = client.post(
+            base_url + "/ai/assistant",
+            headers={"Authorization": "Bearer " + token, "Idempotency-Key": key},
+            json=assistant_payload(text, conversation_id, home),
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as error:
+        raise CliError(
+            f"Request outcome is unknown (Request-Key: {key}); do not retry blindly"
+        ) from error
+    try:
+        body = response.json()
+    except ValueError as error:
+        raise CliError(
+            f"Agent returned an invalid response (HTTP {response.status_code})"
+        ) from error
+    if not isinstance(body, dict):
+        raise CliError(f"Agent returned an invalid response (HTTP {response.status_code})")
+    if response.status_code >= 400:
+        code = body.get("code")
+        if not isinstance(code, str):
+            raise CliError(f"Agent returned an invalid error (HTTP {response.status_code})")
+        raise CliError(f"Agent request failed (HTTP {response.status_code}, code: {code})")
+    return body, key
+
+
+def print_assistant_response(body: dict) -> None:
+    answer = body.get("answer")
+    if not isinstance(answer, dict) or not isinstance(answer.get("text"), str):
+        raise CliError("Agent returned an invalid assistant response")
+    print(f"outcome: {body.get('outcome')}")
+    print(f"answer: {answer['text']}")
+    for event in body.get("toolEvents") or []:
+        if isinstance(event, dict):
+            print(f"tool: {event.get('name')} ({event.get('status')})")
+    _print_structured_data(body.get("data"))
+    usage = body.get("usage")
+    if isinstance(usage, dict):
+        print(f"usage: {json.dumps(usage, ensure_ascii=False)}")
+
+
+def _print_structured_data(data: object) -> None:
+    """Render a compact, safe fallback when a client cannot display a home card."""
+
+    if not isinstance(data, dict):
+        return
+    if data.get("type") == "home_environment":
+        rendered = 0
+        for group in data.get("groups") or []:
+            if not isinstance(group, dict) or not isinstance(group.get("latest"), dict):
+                continue
+            latest = group["latest"]
+            label = group.get("label")
+            value = latest.get("value")
+            unit = latest.get("unit")
+            room = latest.get("roomName")
+            if isinstance(label, str) and isinstance(value, (int, float)) and isinstance(unit, str):
+                suffix = f"（{room}）" if isinstance(room, str) and room else ""
+                print(f"data: {label} {value}{unit}{suffix}")
+                rendered += 1
+            if rendered >= 8:
+                break
+    elif data.get("type") == "device_status":
+        rendered = 0
+        for room in data.get("rooms") or []:
+            if not isinstance(room, dict) or not isinstance(room.get("room"), str):
+                continue
+            for item in room.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                name, state = item.get("name"), item.get("state")
+                if isinstance(name, str) and isinstance(state, str):
+                    print(f"data: {room['room']} · {name}：{state}")
+                    rendered += 1
+                if rendered >= 12:
+                    return
+
+
+def run_assistant_repl(
+    base_url: str,
+    token: str,
+    one_shot: str | None,
+    home: str | None,
+    input_fn=input,
+    client_factory=httpx.Client,
+) -> None:
+    conversation_id: str | None = None
+    with client_factory(follow_redirects=False, trust_env=False) as client:
+        while True:
+            if one_shot is not None:
+                text = one_shot.strip()
+            else:
+                try:
+                    text = input_fn("mijia> ").strip()
+                except EOFError:
+                    break
+            if not text or text in {"/quit", "/exit"}:
+                break
+            body, _key = send_assistant(client, base_url, token, text, conversation_id, home)
+            print_assistant_response(body)
+            if isinstance(body.get("conversationId"), str):
+                conversation_id = body["conversationId"]
+            if one_shot is not None:
+                break
+
+
+class _SmokeProvider:
+    def __init__(self, turns: list[ModelTurn]):
+        self.turns = list(turns)
+
+    async def complete(self, messages: list[ModelMessage], tools: list[dict], ctx):
+        if not self.turns:
+            raise AssertionError("unexpected model iteration")
+        return self.turns.pop(0)
+
+
+async def _smoke_case(turns: list[ModelTurn], message: str):
+    engine = ConversationEngine(
+        _SmokeProvider(turns), CapabilityRegistry([FakeWeatherCapability()])
+    )
+    context = AssistantContext(request_id="req_phase0_smoke", conversation_id="conv_smoke")
+    return await engine.run(context, message)
+
+
+def run_fake_smoke() -> None:
+    direct = asyncio.run(
+        _smoke_case([ModelTurn(content="舒适湿度通常约为 40%–60%。")], "舒适湿度是多少？")
+    )
+    weather = asyncio.run(
+        _smoke_case(
+            [
+                ModelTurn(
+                    tool_calls=[
+                        ToolCall(
+                            id="weather_1",
+                            name="get_weather",
+                            arguments={"location": "新加坡", "days": 1},
+                        )
+                    ]
+                ),
+                ModelTurn(content="新加坡目前炎热，有阵雨可能。"),
+            ],
+            "今天新加坡天气怎么样？",
+        )
+    )
+    clarification = asyncio.run(
+        _smoke_case(
+            [ModelTurn(content="你想查询哪个城市的天气？", response_kind="clarification")],
+            "今天天气怎么样？",
+        )
+    )
+    for name, result in (
+        ("direct-answer", direct),
+        ("weather-tool-loop", weather),
+        ("clarification", clarification),
+    ):
+        print(f"{name}: {result.outcome}")
+
+    rejected = 0
+    cases = [
+        (
+            [
+                ModelTurn(
+                    tool_calls=[
+                        ToolCall(
+                            id="bad_1",
+                            name="get_weather",
+                            arguments={"location": "新加坡", "unexpected": True},
+                        )
+                    ]
+                )
+            ],
+            "malformed-tool",
+        ),
+        (
+            [ModelTurn(tool_calls=[ToolCall(id="write_1", name="activate_scene", arguments={})])],
+            "physical-write-disabled",
+        ),
+    ]
+    for turns, name in cases:
+        try:
+            asyncio.run(_smoke_case(turns, name))
+        except AssistantError:
+            rejected += 1
+            print(f"{name}: rejected")
+    expected_rejections = len(cases) + 1
+    expired_engine = ConversationEngine(
+        _SmokeProvider([ModelTurn(content="late")]), CapabilityRegistry()
+    )
+    expired_context = AssistantContext(
+        request_id="req_phase0_expired",
+        conversation_id="conv_expired",
+        deadline=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    try:
+        asyncio.run(expired_engine.run(expired_context, "deadline"))
+    except AssistantError:
+        rejected += 1
+        print("deadline: rejected before model call")
+    if rejected != expected_rejections:
+        raise CliError("Fake smoke policy cases did not fail closed")
+    print("fake smoke: passed (local only; no credentials, network, or physical writes)")
+
+
 def print_response(body: dict) -> None:
     if body.get("code"):
         print(f"error: {body['code']}")
@@ -581,7 +827,8 @@ def create_parser() -> argparse.ArgumentParser:
         prog="mijia-agent-local-prod",
         description="Run the local agent against live production dependencies.",
     )
-    parser.add_argument("command", choices=("check", "run", "generate-token"))
+    parser.add_argument("command", choices=("check", "smoke", "run", "generate-token"))
+    parser.add_argument("--profile", choices=("fake", "live-read"), default="live-read")
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument(
         "--console-repo",
@@ -627,6 +874,13 @@ def main(argv: list[str] | None = None) -> int:
                 "--idempotency-key cannot resume a prior CLI process; investigate the printed "
                 "key and ask for a fresh explicit action instead"
             )
+        if args.command == "smoke":
+            if args.profile != "fake":
+                raise CliError("smoke currently requires --profile fake")
+            run_fake_smoke()
+            return 0
+        if args.command == "run" and args.profile != "live-read":
+            raise CliError("run currently requires --profile live-read")
         env = build_environment(args.env_file)
         settings = production_settings(env)
         print(target_summary(settings, args.host, args.port))
@@ -690,7 +944,7 @@ def main(argv: list[str] | None = None) -> int:
             process = start_agent(env, args.host, args.port)
             base_url = f"http://{args.host}:{args.port}"
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
-            run_repl(base_url, token, args.message, args.home)
+            run_assistant_repl(base_url, token, args.message, args.home)
         except (CliError, KeyboardInterrupt) as error:
             primary_error = error
             raise

@@ -14,7 +14,8 @@
 | `AI_PYTHON_INTERNAL_SECRET` | No | Sends | Verifies |
 | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_MODEL` | Retire after cutover | Not needed | Yes |
 | `AI_GATEWAY_ALLOWED_MODELS` | — | — | Optional; defaults to configured model only |
-| `AI_GATEWAY_TIMEOUT_MS` / `AI_GATEWAY_MAX_OUTPUT_TOKENS` | — | — | Defaults 5000 / 256 |
+| `AI_GATEWAY_TIMEOUT_MS` / `AI_GATEWAY_MAX_OUTPUT_TOKENS` | — | — | Legacy-router defaults 5000 / 256 |
+| `AI_ASSISTANT_MAX_OUTPUT_TOKENS` | — | — | Canonical assistant completion limit; defaults 512 |
 | `AI_SCENE_APPROVED_IDS` | Yes | No | No |
 | `AI_ENVIRONMENT` | Set preview checks | development/preview/production | Required policy; default production |
 

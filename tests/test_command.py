@@ -54,6 +54,7 @@ def settings(environment="production"):
         model="test-model",
         allowed_models=("test-model",),
         environment=environment,
+        legacy_router_enabled=True,
     )
 
 

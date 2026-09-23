@@ -3,11 +3,11 @@
 This guide runs the Python agent locally while using the real production Makers Gateway
 and production console tool facade. It is a **live production integration check**, not a
 unit test: it incurs real model cost, reads real account/home data, and follows whatever
-physical-device policy production currently enforces.
+read-only home policy production currently enforces. The Phase 0 harness does not register a
+physical-write capability.
 
-The workflow does not add an execution bypass. Until M2's durable executor/idempotency
-work is complete, production scene activation is expected to return
-`AI_SCENE_EXECUTION_DISABLED`.
+The workflow does not add an execution bypass. Action-like model output is rejected because
+`activate_scene` is unavailable; it is never forwarded to the console.
 
 ## Prerequisites
 
@@ -44,10 +44,20 @@ The CLI deliberately refuses that value. Correct the deployment environment/pull
 contains the real HTTPS production console origin; do not work around the check by pointing
 a production run at a local console.
 
-## 2. Run a local interactive session
+## 2. Run the local fake acceptance matrix
 
 ```bash
-mijia-agent-local-prod run
+mijia-agent-local-prod smoke --profile fake
+```
+
+This requires no env file, token, cookie, console checkout, network, or production model. It
+checks a direct answer, clarification, a two-step fake-weather loop, malformed arguments,
+deadline handling, and physical-write rejection.
+
+## 3. Run a local live-read session
+
+```bash
+mijia-agent-local-prod run --profile live-read
 ```
 
 The CLI will:
@@ -59,26 +69,18 @@ The CLI will:
    press Enter, paste the cookie at the hidden prompt, and the CLI delegates to the
    console repo's offline generator (type `token` instead to paste a ready-made token);
 5. start the real Uvicorn app on `127.0.0.1:8000`;
-6. send each prompt through the existing `POST /ai/command` HTTP boundary; and
+6. send each prompt through the canonical `POST /ai/assistant` HTTP boundary; and
 7. stop the child process and delete its private LLM log on exit.
 
-Use `/exit`, `/quit`, Ctrl-D, or Ctrl-C to stop. Every prompt gets a new random
-`Idempotency-Key`, which is printed before dispatch. The CLI never automatically retries a
-timeout, disconnect, `202 processing`, or other unknown result. Preserve the printed key
-and inspect the executor state before deciding whether a new action is safe. The current
-store is process-local, so **a new CLI process cannot claim exactly-once replay**; do not
-repeat a prompt after an uncertain outcome until the executor confirms it did not run.
-After confirmation, any new prompt is a deliberate fresh action with a fresh key.
+Use `/exit`, `/quit`, Ctrl-D, or Ctrl-C to stop. Every prompt gets a new random visible
+`Request-Key`. The CLI never automatically retries a timeout or disconnect. Physical writes are
+unavailable, so this profile cannot use a request key to dispatch an action.
 
 For one prompt and exit:
 
 ```bash
-mijia-agent-local-prod run --message '我还没回家'
+mijia-agent-local-prod run --profile live-read --message '客厅温度是多少？'
 ```
-
-An action-like prompt may select `activate_scene`; under the current production policy the
-expected response is `AI_SCENE_EXECUTION_DISABLED`. This is the M2 gate working. Do not
-change the agent, tool secret, or console route to bypass it.
 
 ## Secure token files
 
@@ -115,20 +117,20 @@ By default, model-call JSONL is written into a private temporary directory (`070
 mijia-agent-local-prod run --keep-log .local-prod/llm-calls.jsonl
 ```
 
-The retained file is set to `0600`, and `.local-prod/` is ignored by Git. The log excludes
-credentials and automation tokens by construction, but it **does contain production user
-text, conversation context, scene names/descriptions, model output, and usage**. Delete it
-when the investigation is complete.
+The retained file is set to `0600`, and `.local-prod/` is ignored by Git. Canonical-assistant
+records contain request metadata, tool names, bounded response lengths, usage, and latency; they
+exclude credentials, tokens, prompts, model response text, and private tool results. Delete a
+retained operational log when the investigation is complete.
 
 ## Scope and expected results
 
 - Model calls use the real configured Makers Gateway and cost real quota/billing.
-- Scene discovery uses the production console and real Xiaomi account context contained in
-  the opaque automation token.
+- Home reads use the production console and real Xiaomi account context contained in the opaque
+  automation token, but only after model tool selection.
 - `AI_QUOTA_ENABLED=false` offers **no cost ceiling**. The CLI does not claim quota or rate
   protection; keep smoke sessions short.
-- `/ai/command` exposes scene command behavior, not the web-chat-only `get_home_status`
-  response. Test that through the deployed web chat path if needed.
+- Generic questions do not invoke the console. Home reads are returned through
+  `get_home_environment` or `get_device_status` tool events.
 - The production console remains authoritative for token expiry, home access, scene
   approval, and physical execution.
 
@@ -136,11 +138,12 @@ Examples:
 
 | Prompt / condition | Expected current behavior |
 |---|---|
-| `我还没回家` | `200`, `status: not_understood`, `intent: none` |
-| `今天天气怎么样` | `200`, `status: not_understood` |
+| a stable general question | `200`, `outcome: direct_answer`, no console tool call |
+| `今天天气怎么样` | clarification because no location is available in Phase 0 |
+| `客厅温度是多少？` | a `get_home_environment` tool loop and grounded answer |
 | expired token | `401 AUTOMATION_TOKEN_EXPIRED` or `AUTOMATION_TOKEN_INVALID` |
 | unknown home via `--home` | `404 AI_HOME_NOT_FOUND` |
-| an accepted scene activation intent | `403 AI_SCENE_EXECUTION_DISABLED` until M2 is complete |
+| a scene activation request | rejected before dispatch because no write tool is registered |
 
 This CLI verifies the locally edited Python process against production dependencies. It
 does not exercise EdgeOne Agent memory/KV, the adapter authorization sequence, quota

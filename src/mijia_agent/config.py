@@ -29,8 +29,10 @@ class Settings:
     allowed_models: tuple[str, ...]
     timeout_ms: int = 5000
     max_output_tokens: int = 256
+    assistant_max_output_tokens: int = 512
     environment: str = "production"
     llm_log_path: str = field(repr=False, default="")
+    legacy_router_enabled: bool = False
 
     def __post_init__(self):
         if len(self.internal_secret) < 32 or len(self.tools_secret) < 32:
@@ -43,7 +45,11 @@ class Settings:
             raise ValueError("Gateway key and explicitly allowed model are required")
         if self.environment not in {"development", "production", "preview"}:
             raise ValueError("Invalid environment")
-        if not 1 <= self.timeout_ms <= 60000 or not 1 <= self.max_output_tokens <= 4096:
+        if (
+            not 1 <= self.timeout_ms <= 60000
+            or not 1 <= self.max_output_tokens <= 4096
+            or not 1 <= self.assistant_max_output_tokens <= 4096
+        ):
             raise ValueError("Invalid Gateway timeout or token limit")
         endpoint(self.gateway_url, self.environment == "development")
         endpoint(self.console_url, self.environment == "development")
@@ -67,6 +73,9 @@ class Settings:
             ),
             timeout_ms=int(env.get("AI_GATEWAY_TIMEOUT_MS", "5000")),
             max_output_tokens=int(env.get("AI_GATEWAY_MAX_OUTPUT_TOKENS", "256")),
+            assistant_max_output_tokens=int(env.get("AI_ASSISTANT_MAX_OUTPUT_TOKENS", "512")),
             environment=env.get("AI_ENVIRONMENT", "production"),
             llm_log_path=env.get("AI_LLM_LOG_PATH", ""),
+            legacy_router_enabled=env.get("AI_LEGACY_ROUTER_ENABLED", "false").lower()
+            in {"1", "true", "yes"},
         )

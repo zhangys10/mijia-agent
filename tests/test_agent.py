@@ -36,6 +36,7 @@ def settings():
         console_url="https://console.example",
         model="test-model",
         allowed_models=("test-model",),
+        legacy_router_enabled=True,
     )
 
 

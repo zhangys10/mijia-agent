@@ -41,10 +41,11 @@ def test_edgeone_cloud_functions_entry_exposes_the_internal_asgi_app(monkeypatch
         "/healthz",
         "/internal/v1/turn",
         "/ai/command",
+        "/ai/assistant",
     }
 
     with TestClient(module.app) as client:
         assert client.get("/healthz").json() == {"status": "ok"}
         assert client.post("/internal/v1/turn").status_code == 401
-        assert client.post("/ai/command").status_code == 401
-        assert client.get("/ai/command").json()["status"] == "ok"
+        assert client.post("/ai/command").status_code == 410
+        assert client.get("/ai/command").json()["code"] == "AI_COMMAND_RETIRED"
