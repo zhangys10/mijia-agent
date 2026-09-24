@@ -31,6 +31,13 @@ _ALLOWED_ERRORS = {
     "AI_AGENT_UNAVAILABLE": 502,
 }
 
+_CONSOLE_DIAGNOSTICS = {
+    "ASSISTANT_AUTHORIZATION_EXCEPTION",
+    "ASSISTANT_REQUEST_BODY_EXCEPTION",
+    "ASSISTANT_CAPABILITIES_EXCEPTION",
+    "ASSISTANT_TOOL_INVOKE_EXCEPTION",
+}
+
 
 class ConsoleAgentTools:
     def __init__(self, settings: Settings, client: httpx.AsyncClient):
@@ -50,7 +57,9 @@ class ConsoleAgentTools:
         try:
             return HomeStatus.model_validate(result)
         except (TypeError, ValueError, ValidationError):
-            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_HOME_STATUS_SCHEMA_INVALID"
+            ) from None
 
     async def invoke_device_status(
         self, user_token: str, request_id: str, home: str | None, arguments: dict
@@ -66,7 +75,9 @@ class ConsoleAgentTools:
         try:
             return DeviceStatus.model_validate(result)
         except (TypeError, ValueError, ValidationError):
-            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_DEVICE_STATUS_SCHEMA_INVALID"
+            ) from None
 
     async def _call_v1(self, endpoint: str, user_token: str, body: dict) -> dict:
         try:
@@ -81,33 +92,59 @@ class ConsoleAgentTools:
                 follow_redirects=False,
             )
         except httpx.TimeoutException:
-            raise AgentError("AI_AGENT_UNAVAILABLE", 504) from None
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE", 504, diagnostic_code="CONSOLE_TIMEOUT"
+            ) from None
         except httpx.HTTPError:
-            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_TRANSPORT_ERROR"
+            ) from None
         if response.status_code != 200 or len(response.content) > 65536:
             allowed = {
                 "AI_UNAUTHENTICATED": 401,
                 "AUTOMATION_TOKEN_EXPIRED": 401,
                 "AUTOMATION_TOKEN_INVALID": 401,
+                "AI_AUTOMATION_TOKEN_ENV_NOT_CONFIGURED": 500,
                 "AI_HOME_NOT_FOUND": 404,
                 "AI_CAPABILITY_UNAVAILABLE": 403,
                 "AI_PREVIEW_READ_ONLY": 403,
                 "AI_INVALID_REQUEST": 400,
                 "AI_EXPOSURE_STORE_UNAVAILABLE": 503,
+                "AI_AGENT_UNAVAILABLE": 502,
             }
+            if len(response.content) > 65536:
+                raise AgentError(
+                    "AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_RESPONSE_TOO_LARGE"
+                )
             try:
-                code = response.json().get("code")
+                payload = response.json()
             except (ValueError, AttributeError):
-                code = None
+                payload = None
+            code = payload.get("code") if isinstance(payload, dict) else None
+            reported_diagnostic = (
+                payload.get("diagnosticCode") if isinstance(payload, dict) else None
+            )
             if isinstance(code, str) and code in allowed:
+                diagnostic = (
+                    f"CONSOLE_{reported_diagnostic}"
+                    if reported_diagnostic in _CONSOLE_DIAGNOSTICS
+                    else f"CONSOLE_HTTP_{response.status_code}"
+                )
+                if code == "AI_AGENT_UNAVAILABLE":
+                    raise AgentError(code, allowed[code], diagnostic_code=diagnostic)
                 raise AgentError(code, allowed[code])
-            raise AgentError("AI_AGENT_UNAVAILABLE")
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE",
+                diagnostic_code=f"CONSOLE_HTTP_{response.status_code}",
+            )
         try:
             value = response.json()
         except ValueError:
-            raise AgentError("AI_AGENT_UNAVAILABLE") from None
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_RESPONSE_INVALID_JSON"
+            ) from None
         if not isinstance(value, dict):
-            raise AgentError("AI_AGENT_UNAVAILABLE")
+            raise AgentError("AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_RESPONSE_NOT_OBJECT")
         return value
 
     async def call(

@@ -99,8 +99,9 @@ sanitized object (never DIDs, raw property addresses, or Xiaomi records):
 
 Python validates this shape strictly (`extra="forbid"`, bounded lists and strings) and
 forwards it as `Result.homeStatus`. Readings are fetched only after the model selects
-the tool; they never enter model messages, replies, or conversation history. The reply
-text is a generic statement; the browser assistant renders the structured readings.
+the tool. The model then receives a bounded projection of the exposure-filtered readings
+alongside the original question and generates the final answer. The same typed snapshot
+is returned as structured client data for the browser.
 
 `get_device_status` answers "which lights/devices are on, by room" with the same
 sanitization contract (never DIDs, model strings, raw property addresses, or Xiaomi
@@ -126,9 +127,10 @@ as its home dashboard:
 
 Devices without a readable power property (locks, sensors) report `state: "unknown"`
 — never a guessed value. Python validates the shape strictly and forwards it as
-`Result.deviceStatus`; states are fetched only after the model selects the tool and
-never enter model messages, replies, or conversation history. The reply text is a
-generic statement; the browser assistant renders the per-room device card.
+`Result.deviceStatus`; states are fetched only after the model selects the tool. The
+model receives a bounded, sanitized projection of the exposed per-room device states
+with the original question and generates the final answer. The same typed snapshot is
+returned as structured client data for the browser.
 
 The future executor must refresh the scene, validate alias/home/approval revision/risk,
 claim a durable execution receipt, and return only `status` and `message`. It must not
@@ -165,10 +167,13 @@ console filters the sanitized snapshot by the requested rooms and metrics. Live 
 still require the MIoT property batch reads performed within that collector.
 
 `get_home_environment` accepts optional `rooms` and `metrics`; `get_device_status` accepts
-optional `rooms`, `kinds`, and `states`. Results remain typed and sanitized. Measurement
-values and device states are returned only in structured client data; the model receives
-completeness/count metadata, not the readings themselves. Scene discovery and all writes
-remain outside this Phase 2 contract.
+optional `rooms`, `kinds`, and `states`. Results remain typed and sanitized. After the
+tool returns, the model receives the original user question and a bounded projection of
+the exposure-filtered measurements or states to generate its final answer. Exact repeated
+home-read calls within one turn reuse the first result. The final answer and typed
+snapshot are returned to the caller; Makers stores a generic summary in model history
+for home-read turns, so later turns do not automatically receive past measurements.
+Scene discovery and all writes remain outside this Phase 2 contract.
 
 ## Errors and cancellation
 

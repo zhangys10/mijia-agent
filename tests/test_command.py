@@ -495,6 +495,70 @@ def test_console_token_errors_pass_through(code, status):
     assert (caught.value.code, caught.value.status) == (code, status)
 
 
+def test_console_v1_token_environment_error_is_not_collapsed_to_agent_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/internal/assistant/v1/tools:invoke"
+        return httpx.Response(500, json={"code": "AI_AUTOMATION_TOKEN_ENV_NOT_CONFIGURED"})
+
+    tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(tools.invoke_home_environment(TOKEN, "req_test", None, {}))
+    assert (caught.value.code, caught.value.status) == (
+        "AI_AUTOMATION_TOKEN_ENV_NOT_CONFIGURED",
+        500,
+    )
+
+
+def test_console_v1_failure_keeps_public_error_safe_and_records_diagnostic_category():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, json={"code": "AI_AGENT_UNAVAILABLE"})
+
+    tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(tools.invoke_home_environment(TOKEN, "req_test", None, {}))
+    assert (caught.value.code, caught.value.status, caught.value.diagnostic_code) == (
+        "AI_AGENT_UNAVAILABLE",
+        502,
+        "CONSOLE_HTTP_502",
+    )
+
+
+def test_console_v1_records_only_allowlisted_handler_diagnostic_codes():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            json={
+                "code": "AI_AGENT_UNAVAILABLE",
+                "diagnosticCode": "ASSISTANT_AUTHORIZATION_EXCEPTION",
+            },
+        )
+
+    tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(tools.invoke_home_environment(TOKEN, "req_test", None, {}))
+    assert (caught.value.code, caught.value.status, caught.value.diagnostic_code) == (
+        "AI_AGENT_UNAVAILABLE",
+        502,
+        "CONSOLE_ASSISTANT_AUTHORIZATION_EXCEPTION",
+    )
+
+
+def test_console_v1_ignores_unrecognized_console_diagnostic_text():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            json={
+                "code": "AI_AGENT_UNAVAILABLE",
+                "diagnosticCode": "SECRET\nresponse-body",
+            },
+        )
+
+    tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AgentError) as caught:
+        asyncio.run(tools.invoke_home_environment(TOKEN, "req_test", None, {}))
+    assert caught.value.diagnostic_code == "CONSOLE_HTTP_502"
+
+
 def test_console_activate_timeout_maps_to_device_timeout():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("secret", request=request)

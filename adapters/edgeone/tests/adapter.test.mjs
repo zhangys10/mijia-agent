@@ -151,15 +151,15 @@ test("structured homeStatus survives forwarding, receipt storage, and replay wit
     groups: [{ metric: "temperature", label: "温度", unit: "°C", latest: { value: 25.5, unit: "°C", sourceLabel: "客厅温湿度计", roomName: "客厅", capturedAt: "2026-09-20T08:00:00Z", freshness: "fresh" }, readings: [] }],
     warnings: ["部分设备读取失败"],
   };
-  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭环境状态。", intent: "get_home_status", homeStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "客厅温度当前为 25.5°C。", intent: "get_home_status", homeStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
   t.mock.method(globalThis, "fetch", async (url, options) => {
     if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
   });
   const first = await (await onRequest(context)).json();
   assert.deepEqual(first.homeStatus, homeStatus);
-  // Only the generic message enters conversation history, never the structured readings.
-  assert.equal([...history.values()][0][1].content, "已读取当前家庭环境状态。");
+  assert.equal(first.message, "客厅温度当前为 25.5°C。");
+  assert.equal([...history.values()][0][1].content, "Answered the user's current home environment question.");
   context.request.body.requestId = "req_example_000002";
   const replay = await (await onRequest(context)).json();
   assert.deepEqual(replay.homeStatus, homeStatus);
@@ -176,15 +176,15 @@ test("structured deviceStatus survives forwarding, receipt storage, and replay w
     rooms: [{ room: "客厅", items: [{ name: "客厅吸顶灯", kind: "light", state: "on", online: true }] }],
     warnings: [],
   };
-  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "已读取当前家庭设备状态。", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "客厅吸顶灯当前已开启。", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
   t.mock.method(globalThis, "fetch", async (url, options) => {
     if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
   });
   const first = await (await onRequest(context)).json();
   assert.deepEqual(first.deviceStatus, deviceStatus);
-  // Only the generic message enters conversation history, never the structured states.
-  assert.equal([...history.values()][0][1].content, "已读取当前家庭设备状态。");
+  assert.equal(first.message, "客厅吸顶灯当前已开启。");
+  assert.equal([...history.values()][0][1].content, "Answered the user's current device status question.");
   context.request.body.requestId = "req_example_000002";
   const replay = await (await onRequest(context)).json();
   assert.deepEqual(replay.deviceStatus, deviceStatus);

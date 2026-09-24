@@ -25,12 +25,15 @@ from mijia_assistant.capabilities import (
 from mijia_assistant.capabilities.weather import amap_signature, caiyun_signature
 from mijia_assistant.conversation import ConversationEngine
 from mijia_assistant.models import (
+    Answer,
     AssistantContext,
     AssistantError,
+    AssistantResponse,
     CapabilityResult,
     ModelMessage,
     ModelTurn,
     ToolCall,
+    ToolEvent,
     Usage,
 )
 from mijia_assistant.providers import OpenAICompatibleProvider, OpenAIStreamNormalizer
@@ -156,6 +159,17 @@ def test_failed_tool_result_log_adds_only_safe_error_code():
         "errorCode": "MI_CLOUD_ERROR",
         "ts": record["ts"],
     }
+
+
+def test_tool_result_log_redacts_unrecognized_diagnostic_values():
+    sink = StringIO()
+    LlmCallLogger(sink=sink).log_tool_result(
+        tool_name="get_home_environment",
+        status="error",
+        error_code="CONSOLE_HTTP_502\nprivate-response-body",
+    )
+    record = json.loads(sink.getvalue().splitlines()[0])
+    assert record["errorCode"] == "TOOL_FAILED"
 
 
 def test_missing_weather_location_can_return_clarification_without_tool():
@@ -390,14 +404,23 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
                 "home",
                 {},
             )
-            raise AgentError("MI_CLOUD_ERROR", 502)
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE",
+                502,
+                diagnostic_code="CONSOLE_HTTP_502",
+            )
 
     provider = ScriptedProvider(
         ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})])
     )
     capability = HomeEnvironmentCapability(FailingHomeTools())
+    sink = StringIO()
     result = run(
-        ConversationEngine(provider, CapabilityRegistry([capability])),
+        ConversationEngine(
+            provider,
+            CapabilityRegistry([capability]),
+            tool_result_logger=LlmCallLogger(sink=sink).log_tool_result,
+        ),
         "看看家里情况",
         context(automation_token=SecretStr("opaque-token"), home_selector="home"),
     )
@@ -405,6 +428,7 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     assert result.outcome == "tool_answer"
     assert result.answer.text == "查询暂时无法完成，请稍后再试。"
     assert result.tool_events[0].status == "error"
+    assert json.loads(sink.getvalue())["errorCode"] == "CONSOLE_HTTP_502"
 
 
 def test_home_capability_forwards_bounded_filters_and_redacts_readings_from_model():
@@ -448,10 +472,23 @@ def test_home_capability_forwards_bounded_filters_and_redacts_readings_from_mode
     )
     assert result.model_content == {
         "completeness": "complete",
-        "availableMetrics": 1,
         "capturedAt": "2026-09-23T00:00:00Z",
+        "readings": [
+            {
+                "metric": "temperature",
+                "label": "温度",
+                "value": 25.5,
+                "unit": "°C",
+                "roomName": "客厅",
+                "capturedAt": "2026-09-23T00:00:00Z",
+                "freshness": "fresh",
+            }
+        ],
+        "truncated": False,
+        "warnings": [],
     }
     assert result.client_data["groups"][0]["latest"]["value"] == 25.5
+    assert result.is_terminal is False
 
 
 def test_home_capability_propagates_console_exposure_rejection():
@@ -471,6 +508,64 @@ def test_home_capability_propagates_console_exposure_rejection():
         )
 
 
+def test_home_model_projection_covers_each_metric_before_truncation():
+    captured_at = "2026-09-23T00:00:00Z"
+
+    class HomeTools:
+        async def invoke_home_environment(self, *args):
+            return HomeStatus.model_validate(
+                {
+                    "capturedAt": captured_at,
+                    "completeness": "complete",
+                    "groups": [
+                        {
+                            "metric": metric,
+                            "label": label,
+                            "unit": unit,
+                            "readings": [
+                                {
+                                    "value": value,
+                                    "unit": unit,
+                                    "sourceLabel": "检测仪",
+                                    "roomName": "客厅",
+                                    "capturedAt": captured_at,
+                                }
+                                for _ in range(20)
+                            ],
+                        }
+                        for metric, label, unit, value in [
+                            ("temperature", "温度", "°C", 25.5),
+                            ("formaldehyde", "甲醛", "mg/m³", 0.021),
+                        ]
+                    ],
+                    "warnings": [],
+                }
+            )
+
+    provider = ScriptedProvider(
+        ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})]),
+        ModelTurn(content="已读取。"),
+    )
+    result = run(
+        ConversationEngine(
+            provider,
+            CapabilityRegistry([HomeEnvironmentCapability(HomeTools())]),
+        ),
+        "看看甲醛",
+        context(automation_token=SecretStr("opaque-token"), home_selector="home"),
+    )
+    assert result.data["groups"][1]["metric"] == "formaldehyde"
+    tool_payload = json.loads(
+        next(message.content for message in provider.requests[1][0] if message.role == "tool")
+    )
+    assert len(tool_payload["readings"]) == 32
+    assert tool_payload["truncated"] is True
+    assert {item["metric"] for item in tool_payload["readings"]} == {
+        "temperature",
+        "formaldehyde",
+    }
+
+
 def test_home_capability_rejects_invalid_metric_before_console_call():
     class HomeTools:
         async def invoke_home_environment(self, *args):
@@ -481,6 +576,32 @@ def test_home_capability_rejects_invalid_metric_before_console_call():
             HomeEnvironmentCapability(HomeTools()).invoke(
                 context(automation_token=SecretStr("opaque-token")), {"metrics": ["unsupported"]}
             )
+        )
+
+
+def test_home_tool_rejects_non_json_arguments_before_cache_or_console_call():
+    class HomeTools:
+        async def invoke_home_environment(self, *args):
+            pytest.fail("invalid arguments must not reach the console")
+
+    provider = ScriptedProvider(
+        ModelTurn(
+            tool_calls=[
+                ToolCall(
+                    id="home",
+                    name="get_home_environment",
+                    arguments={"metrics": [float("nan")]},
+                )
+            ]
+        )
+    )
+    with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
+        run(
+            ConversationEngine(
+                provider, CapabilityRegistry([HomeEnvironmentCapability(HomeTools())])
+            ),
+            "查看温度",
+            context(automation_token=SecretStr("opaque-token")),
         )
 
 
@@ -806,6 +927,74 @@ def test_internal_canonical_ingress_accepts_only_the_automation_token_envelope()
     assert response.json()["speak"] == "A direct answer."
     assert legacy_envelope.status_code == 400
     assert legacy_envelope.json()["code"] == "AI_INVALID_REQUEST"
+
+
+def test_internal_canonical_ingress_preserves_partial_home_data_and_model_answer():
+    class FakeEngine:
+        async def run(self, ctx, message, history):
+            assert message == "甲醛超标了吗"
+            return AssistantResponse(
+                request_id=ctx.request_id,
+                conversation_id=ctx.conversation_id,
+                status="completed",
+                outcome="tool_answer",
+                answer=Answer(text="客厅甲醛当前读数为 0.021 mg/m³。"),
+                data={
+                    "type": "home_environment",
+                    "capturedAt": "2026-09-23T00:00:00Z",
+                    "completeness": "partial",
+                    "groups": [
+                        {
+                            "metric": "formaldehyde",
+                            "label": "甲醛",
+                            "unit": "mg/m³",
+                            "latest": {
+                                "value": 0.021,
+                                "unit": "mg/m³",
+                                "sourceLabel": "客厅检测仪",
+                                "roomName": "客厅",
+                                "capturedAt": "2026-09-23T00:00:00Z",
+                                "freshness": "fresh",
+                            },
+                            "readings": [],
+                        }
+                    ],
+                    "warnings": ["部分设备读数暂时不可用。"],
+                },
+                tool_events=[ToolEvent(name="get_home_environment", status="partial")],
+            )
+
+    app = create_app(
+        app_settings(),
+        service=object(),
+        command_service=object(),
+        assistant_engine=FakeEngine(),
+        assistant_tools=object(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/v1/assistant",
+            headers={"Authorization": "Bearer " + app_settings().internal_secret},
+            json={
+                "requestId": "req_canonical_internal_000002",
+                "conversationId": "conv_canonical_002",
+                "principalId": "usr_canonical_test",
+                "homeId": "home-canonical",
+                "message": "甲醛超标了吗",
+                "idempotencyKey": "idem_canonical_internal_000002",
+                "scopes": ["ai:chat"],
+                "automationToken": "opaque-automation-token",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == body["answer"]["text"] == "客厅甲醛当前读数为 0.021 mg/m³。"
+    assert body["intent"] == "get_home_status"
+    assert body["tool"] == {"name": "get_home_status", "status": "partial_success"}
+    assert body["toolEvents"] == [{"name": "get_home_environment", "status": "partial"}]
+    assert body["homeStatus"]["groups"][0]["latest"]["value"] == 0.021
+    assert body["data"]["type"] == "home_environment"
 
 
 def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():

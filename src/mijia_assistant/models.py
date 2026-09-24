@@ -108,7 +108,8 @@ class AssistantResponse(StrictModel):
 
 
 class AssistantError(Exception):
-    def __init__(self, code: str, status: int = 400):
+    def __init__(self, code: str, status: int = 400, diagnostic_code: str | None = None):
         super().__init__(code)
         self.code = code
         self.status = status
+        self.diagnostic_code = diagnostic_code
