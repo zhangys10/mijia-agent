@@ -138,6 +138,33 @@ an idempotency key alone do not establish that an action is safe.
 The existing `/api/xiaomi/control` and `/api/xiaomi/scenes/run` are **not** generic
 LLM tools. They use different browser/session assumptions and expose raw device IDs.
 
+### Phase 2 versioned home observation API
+
+The canonical assistant uses the versioned automation-token endpoints for home reads:
+
+- `POST /api/internal/assistant/v1/capabilities`
+- `POST /api/internal/assistant/v1/tools:invoke`
+
+Both require the console service Bearer plus `X-Ai-User-Token`. The console opens the
+audience-bound `mijia-agent` token, re-derives principal/home context, and reads the
+home-wide exposure record. Python receives only a bounded manifest; it intersects the
+manifest's known operation names with its own versioned tool schemas. It never accepts
+remote model schemas or descriptions.
+
+The manifest reports `contextVersion: "1"`, an opaque `exposureRevision`, exposed room
+names, exposed measurement types, exposed device kinds, and read capability availability.
+Missing exposure records mean disabled with no rooms, metrics, devices, or capabilities.
+Only after a home tool is selected does the agent invoke the console. Tool filters can
+reduce disclosure, and every requested room, metric, kind, and state must remain within
+the current exposure projection. The console filters device IDs against the selected
+home's current inventory before invoking the existing collectors.
+
+`get_home_environment` accepts optional `rooms` and `metrics`; `get_device_status` accepts
+optional `rooms`, `kinds`, and `states`. Results remain typed and sanitized. Measurement
+values and device states are returned only in structured client data; the model receives
+completeness/count metadata, not the readings themselves. Scene discovery and all writes
+remain outside this Phase 2 contract.
+
 ## Errors and cancellation
 
 Common codes: `AI_INVALID_REQUEST` (400), `AI_UNAUTHENTICATED` (401),

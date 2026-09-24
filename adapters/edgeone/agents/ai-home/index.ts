@@ -13,7 +13,7 @@ export async function onRequest(context: Context) {
     const key = body.idempotencyKey;
     if (typeof message !== "string" || !message.trim() || message.length > 500
       || typeof key !== "string" || key.length < 16 || key.length > 128) throw new Error("AI_INVALID_REQUEST");
-    const fingerprint = await digest(JSON.stringify([input.principalId, input.homeId, conversationId, message, [...input.scopes].sort(), body.locale ?? "zh-CN", body.timezone ?? "Asia/Shanghai"]));
+    const fingerprint = await digest(JSON.stringify([input.principalId, input.homeId, conversationId, message, [...input.scopes].sort(), body.locale ?? "zh-CN", body.timezone ?? "Asia/Shanghai", body.channel ?? "web"]));
     const receiptKey = `idem_${await digest(JSON.stringify([input.principalId, input.homeId, key]))}`;
     lock = scopedId;
     if (active.has(lock)) { lock = undefined; throw new Error("AI_REQUEST_IN_PROGRESS"); }
@@ -48,7 +48,8 @@ export async function onRequest(context: Context) {
         headers: { Authorization: `Bearer ${pythonSecret}`, "Content-Type": "application/json" },
         body: JSON.stringify({ requestId, conversationId, principalId: input.principalId,
           homeId: input.homeId, scopes: input.scopes, automationToken: input.automationToken,
-          message, idempotencyKey: key, locale: body.locale ?? "zh-CN", timezone: body.timezone ?? "Asia/Shanghai", history }),
+          message, idempotencyKey: key, locale: body.locale ?? "zh-CN", timezone: body.timezone ?? "Asia/Shanghai",
+          channel: body.channel ?? "web", history }),
       });
     } catch {
       // Timeout/cancellation may happen after a physical effect. Never automatically replay.

@@ -14,7 +14,7 @@ from mijia_agent.app import create_app
 from mijia_agent.config import Settings
 from mijia_agent.gateway import Gateway
 from mijia_agent.llm_log import LlmCallLogger
-from mijia_agent.models import AgentError
+from mijia_agent.models import AgentError, HomeCapabilities, HomeStatus
 from mijia_assistant.capabilities import (
     CaiyunWeatherCapability,
     CapabilityRegistry,
@@ -380,8 +380,31 @@ def test_tool_result_error_returns_readable_answer_without_model_retry():
 
 def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     class FailingHomeTools:
-        async def get_home_status(self, user_token, request_id, home):
+        async def capabilities_v1(self, user_token, request_id, home):
             assert (user_token, request_id, home) == ("opaque-token", "req_phase0_test", "home")
+            return HomeCapabilities.model_validate(
+                {
+                    "contextVersion": "1",
+                    "exposureRevision": "exp_test",
+                    "capabilities": [
+                        {"name": "get_home_environment", "available": True, "risk": "home_read"}
+                    ],
+                    "projection": {
+                        "rooms": ["客厅"],
+                        "measurementTypes": ["temperature"],
+                        "deviceKinds": [],
+                        "sceneSearchAvailable": False,
+                    },
+                }
+            )
+
+        async def invoke_home_environment(self, user_token, request_id, home, arguments):
+            assert (user_token, request_id, home, arguments) == (
+                "opaque-token",
+                "req_phase0_test",
+                "home",
+                {},
+            )
             raise AgentError("MI_CLOUD_ERROR", 502)
 
     provider = ScriptedProvider(
@@ -397,6 +420,95 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     assert result.outcome == "tool_answer"
     assert result.answer.text == "查询暂时无法完成，请稍后再试。"
     assert result.tool_events[0].status == "error"
+
+
+def test_home_capability_intersects_filters_with_console_manifest_and_redacts_readings_from_model():
+    class HomeTools:
+        async def capabilities_v1(self, user_token, request_id, home):
+            assert (user_token, request_id, home) == ("opaque-token", "req_phase0_test", "home")
+            return HomeCapabilities.model_validate(
+                {
+                    "contextVersion": "1",
+                    "exposureRevision": "exp_test",
+                    "capabilities": [
+                        {"name": "get_home_environment", "available": True, "risk": "home_read"}
+                    ],
+                    "projection": {
+                        "rooms": ["客厅"],
+                        "measurementTypes": ["temperature"],
+                        "deviceKinds": [],
+                        "sceneSearchAvailable": False,
+                    },
+                }
+            )
+
+        async def invoke_home_environment(self, user_token, request_id, home, arguments):
+            assert arguments == {"rooms": ["客厅"], "metrics": ["temperature"]}
+            return HomeStatus.model_validate(
+                {
+                    "capturedAt": "2026-09-23T00:00:00Z",
+                    "completeness": "complete",
+                    "groups": [
+                        {
+                            "metric": "temperature",
+                            "label": "温度",
+                            "unit": "°C",
+                            "latest": {
+                                "value": 25.5,
+                                "unit": "°C",
+                                "sourceLabel": "客厅温度计",
+                                "roomName": "客厅",
+                                "capturedAt": "2026-09-23T00:00:00Z",
+                            },
+                        }
+                    ],
+                    "warnings": [],
+                }
+            )
+
+    capability = HomeEnvironmentCapability(HomeTools())
+    result = asyncio.run(
+        capability.invoke(
+            context(automation_token=SecretStr("opaque-token"), home_selector="home"),
+            {
+                "rooms": ["客厅"],
+                "metrics": ["temperature"],
+            },
+        )
+    )
+    assert result.model_content == {
+        "completeness": "complete",
+        "availableMetrics": 1,
+        "capturedAt": "2026-09-23T00:00:00Z",
+    }
+    assert result.client_data["groups"][0]["latest"]["value"] == 25.5
+
+
+def test_home_capability_rejects_filters_outside_exposure_projection():
+    class HomeTools:
+        async def capabilities_v1(self, user_token, request_id, home):
+            return HomeCapabilities.model_validate(
+                {
+                    "contextVersion": "1",
+                    "exposureRevision": "exp_test",
+                    "capabilities": [
+                        {"name": "get_home_environment", "available": True, "risk": "home_read"}
+                    ],
+                    "projection": {
+                        "rooms": ["客厅"],
+                        "measurementTypes": ["temperature"],
+                        "deviceKinds": [],
+                        "sceneSearchAvailable": False,
+                    },
+                }
+            )
+
+    with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
+        asyncio.run(
+            HomeEnvironmentCapability(HomeTools()).invoke(
+                context(automation_token=SecretStr("opaque-token")), {"rooms": ["书房"]}
+            )
+        )
 
 
 def test_unexpected_tool_exception_returns_readable_answer():
@@ -633,6 +745,31 @@ def test_canonical_http_response_and_legacy_gate():
     assert "opaque-token" not in model_payload
 
 
+def test_direct_siri_response_has_a_bounded_speech_renderer():
+    provider = ScriptedProvider(ModelTurn(content="答" * 400))
+
+    class FakeAuth:
+        async def call(self, token, request_id, tool, home, arguments):
+            return {"ok": True}
+
+    app = create_app(
+        app_settings(),
+        service=object(),
+        command_service=object(),
+        assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
+        assistant_tools=FakeAuth(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/ai/assistant",
+            headers={"Authorization": "Bearer opaque-token"},
+            json={"text": "你好", "channel": "siri"},
+        )
+    assert response.status_code == 200
+    assert len(response.json()["answer"]["speechText"]) == 280
+    assert len(response.json()["answer"]["text"]) == 400
+
+
 def test_canonical_ingress_authenticates_token_before_model_call():
     provider = ScriptedProvider(ModelTurn(content="must not run"))
 
@@ -676,6 +813,7 @@ def test_internal_canonical_ingress_accepts_only_the_automation_token_envelope()
         "idempotencyKey": "idem_canonical_internal_000001",
         "scopes": ["ai:chat"],
         "automationToken": "opaque-automation-token",
+        "channel": "siri",
     }
     with TestClient(app) as client:
         response = client.post(
@@ -692,6 +830,7 @@ def test_internal_canonical_ingress_accepts_only_the_automation_token_envelope()
 
     assert response.status_code == 200
     assert response.json()["message"] == "A direct answer."
+    assert response.json()["speak"] == "A direct answer."
     assert legacy_envelope.status_code == 400
     assert legacy_envelope.json()["code"] == "AI_INVALID_REQUEST"
 

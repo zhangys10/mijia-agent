@@ -1,3 +1,4 @@
+import json
 import stat
 from pathlib import Path
 
@@ -717,3 +718,59 @@ def test_print_assistant_response_renders_bounded_environment_data(capsys):
     output = capsys.readouterr().out
     assert "answer: 已读取当前家庭环境状态。" in output
     assert "data: 甲醛 0.048mg/m³（客厅）" in output
+
+
+def test_send_assistant_forwards_channel_and_expectations_check_read_tool(capsys):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "outcome": "tool_answer",
+                "answer": {"text": "已读取。", "speechText": "客厅温度正常。"},
+                "toolEvents": [{"name": "get_home_environment", "status": "success"}],
+                "usage": {"totalTokens": 12, "estimated": False},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        body, _key = local_prod.send_assistant(
+            client, "http://local", "opaque-token", "客厅温度是多少？", None, None, "siri"
+        )
+
+    assert requests[0].url.path == "/ai/assistant"
+    assert json.loads(requests[0].content)["channel"] == "siri"
+    local_prod.print_assistant_response(body, "siri", "get_home_environment")
+    output = capsys.readouterr().out
+    assert "speechText: 客厅温度正常。" in output
+    assert "tool: get_home_environment (success)" in output
+
+
+def test_assistant_live_read_expectations_fail_closed(capsys):
+    body = {
+        "answer": {"text": "暂时无法读取。", "speechText": "暂时无法读取。"},
+        "toolEvents": [{"name": "get_home_environment", "status": "error"}],
+    }
+    with pytest.raises(local_prod.CliError, match="Expected successful home read tool"):
+        local_prod.print_assistant_response(body, "siri", "get_home_environment")
+
+    with pytest.raises(local_prod.CliError, match="bounded speechText"):
+        local_prod.print_assistant_response(
+            {"answer": {"text": "ok", "speechText": "x" * 281}}, "siri"
+        )
+
+    assert capsys.readouterr().out == ""
+
+
+def test_expect_tool_requires_a_single_live_read_message(tmp_path, capsys):
+    env_path = tmp_path / ".env"
+    write_env(env_path)
+
+    result = local_prod.main(
+        ["run", "--env-file", str(env_path), "--expect-tool", "get_home_environment"]
+    )
+
+    assert result == 2
+    assert "--expect-tool requires run --message" in capsys.readouterr().err

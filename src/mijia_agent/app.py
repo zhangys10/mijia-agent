@@ -48,6 +48,11 @@ COMMAND_ERROR_MAP = {
     "IDEMPOTENCY_CONFLICT": ("IDEMPOTENCY_CONFLICT", 409, "请求重复且内容不一致"),
     "INVALID_REQUEST": ("INVALID_REQUEST", 400, "请求格式不正确"),
     "AI_SCENE_EXECUTION_DISABLED": ("AI_SCENE_EXECUTION_DISABLED", 403, "场景执行尚未开放"),
+    "AI_CAPABILITY_UNAVAILABLE": (
+        "AI_CAPABILITY_UNAVAILABLE",
+        403,
+        "该家庭尚未向 AI 助手开放这类只读信息",
+    ),
     "AI_SCENE_NOT_FOUND": ("AI_SCENE_NOT_FOUND", 400, "未找到匹配的场景"),
     "AI_PREVIEW_READ_ONLY": ("AI_PREVIEW_READ_ONLY", 403, "预览环境只读"),
     "AI_AGENT_UNAVAILABLE": ("MI_CLOUD_ERROR", 502, "米家服务暂时不可用"),
@@ -282,7 +287,10 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             history = await app.state.conversation_repository.get(context)
             result = await app.state.assistant_engine.run(context, body.text, history)
             await app.state.conversation_repository.append(context, body.text, result)
-            return JSONResponse(public_response(result), headers=headers)
+            response_body = public_response(result)
+            if body.channel in {"siri", "voice"}:
+                response_body["answer"]["speechText"] = result.answer.text[:280]
+            return JSONResponse(response_body, headers=headers)
         except (ValueError, ValidationError):
             return JSONResponse(
                 {"code": "INVALID_REQUEST", "requestId": request_id}, 400, headers=headers
@@ -322,6 +330,7 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             context = AssistantContext(
                 request_id=turn.requestId,
                 conversation_id=turn.conversationId,
+                channel=turn.channel,
                 locale=turn.locale,
                 timezone=turn.timezone,
                 scopes=frozenset(turn.scopes),
@@ -347,6 +356,9 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 "requestId": result.request_id,
                 "conversationId": result.conversation_id,
                 "message": result.answer.text,
+                "speak": result.answer.text[:280]
+                if turn.channel in {"siri", "voice"}
+                else result.answer.text,
                 "intent": intent,
                 "usage": {
                     "promptTokens": result.usage.prompt_tokens,
