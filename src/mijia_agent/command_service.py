@@ -15,7 +15,7 @@ import json
 import uuid
 
 from .command_console import ConsoleAgentTools
-from .command_idempotency import IdempotencyStore
+from .command_idempotency import FAILED, IdempotencyStore
 from .command_models import CommandDecision, CommandRequest, CommandResponse, ProcessingResponse
 from .command_rules import (
     DEFAULT_MAX_CONVERSATION_TURNS,
@@ -25,6 +25,7 @@ from .command_rules import (
     default_reply,
     fallback_reply,
     find_fallback_scene,
+    explicit_current_scene_command,
     recover_intent,
     sanitize_llm_output,
     sanitize_message,
@@ -101,6 +102,11 @@ class CommandService:
             replay = self.idempotency.completed(idempotency_key)
             if replay is not None:
                 return CommandResponse.model_validate(replay)
+            if lookup == FAILED:
+                failure = self.idempotency.failure(idempotency_key)
+                if failure and isinstance(failure.get("code"), str) and type(failure.get("status")) is int:
+                    raise AgentError(failure["code"], failure["status"])
+                raise AgentError("AI_EXECUTION_STATUS_UNKNOWN", 409)
 
         scenes = await self.tools.list_scenes(token, request_id, request.home)
         decision = await self._decide(request_id, request, scenes, state)
@@ -121,6 +127,18 @@ class CommandService:
 
         scene = decision.scene
         assert scene is not None  # narrowed by decision.type == "tool_call"
+        if not explicit_current_scene_command(request.text, scene):
+            return CommandResponse(
+                requestId=request_id,
+                conversationId=conversation_id,
+                conversationReset=state.is_reset,
+                turnIndex=state.turn_index,
+                status="not_understood",
+                intent="none",
+                message=reset_prefix + "如需执行场景，请直接说出场景名称和执行指令。",
+                decisionSource=decision.decisionSource,
+                llmOutput=sanitize_llm_output(decision.llm_output, scenes),
+            )
         if not idempotency_key:
             # Tool execution requires Idempotency-Key, exactly like the console route.
             raise AgentError("INVALID_REQUEST", 400)
@@ -128,7 +146,7 @@ class CommandService:
             self.idempotency.start(idempotency_key, body_hash)
         try:
             execution = await self.tools.activate_scene(
-                token, request_id, request.home, scene.alias, idempotency_key
+                token, request_id, request.home, scene.alias, scene.revision, idempotency_key, body_hash
             )
         except AgentError as error:
             if body_hash:
@@ -144,7 +162,7 @@ class CommandService:
             intent="activate_scene",
             sceneId=scene.alias,
             sceneName=scene.name,
-            message=reset_prefix + sanitize_message(decision.reply, scenes),
+            message=reset_prefix + execution["message"],
             execution={
                 "status": execution["status"],
                 "succeeded": execution["succeeded"],
@@ -198,7 +216,7 @@ class CommandService:
             reply = args.get("replyMessage")
             if reply is not None and not isinstance(reply, str):
                 raise _ModelResponseRejected("invalid replyMessage")
-            scene = next((s for s in scenes if s.alias == args.get("sceneId")), None)
+            scene = next((s for s in scenes if s.risk == "low" and s.alias == args.get("sceneId")), None)
             if scene is None:
                 raise _ModelResponseRejected("unknown scene")
             return CommandDecision(

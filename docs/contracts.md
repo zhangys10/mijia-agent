@@ -65,10 +65,23 @@ token only after a home capability is selected.
 | Tool | Arguments | Current behavior |
 |---|---|---|
 | `authorize` | `{}` | `{ "ok": true, "principalId", "homeId", "scopes": ["ai:chat"] }` after fresh token authentication/home checks; adapter-only, not model-visible |
-| `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount" }] }` |
+| `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "risk", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until executor gate is complete |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until approval and executor gates are complete |
+
+Scene discovery returns a content revision hash and normalized action summaries. The
+agent only offers currently approved scenes classified `risk: "low"` to the action
+model schema. The console re-reads the scene and rejects a stale revision or any scene
+that cannot be proven to target one unambiguous light/switch using supported
+power/brightness/color-temperature actions. Scene aliases, action summaries and
+revision hashes are not authorization. The separate per-home scene-action approval
+must be on, and the deployment-wide `AI_SCENE_EXECUTION_ENABLED` flag remains off
+until the operational gates in `docs/TODO.md` are complete.
+When enabled, a positive Xiaomi scene-run acknowledgment is reported as “request
+submitted”; it is not a device-state readback and must not be rendered as confirmed
+physical completion. A lost response or missing receipt is `AI_EXECUTION_STATUS_UNKNOWN`
+and must not be retried automatically.
 
 `get_home_status` aggregates readings from any supported devices and returns a strict
 sanitized object (never DIDs, raw property addresses, or Xiaomi records):
@@ -142,7 +155,7 @@ LLM tools. They use different browser/session assumptions and expose raw device 
 
 Common codes: `AI_INVALID_REQUEST` (400), `AI_UNAUTHENTICATED` (401),
 `AI_SCOPE_FORBIDDEN`/`AI_HOME_FORBIDDEN`/`AI_PREVIEW_READ_ONLY` (403),
-`AI_IDEMPOTENCY_CONFLICT`/`AI_REQUEST_IN_PROGRESS`/`AI_EXECUTION_STATUS_UNKNOWN` (409),
+`AI_IDEMPOTENCY_CONFLICT`/`AI_REQUEST_IN_PROGRESS`/`AI_EXECUTION_STATUS_UNKNOWN`/`AI_SCENE_REVISION_CHANGED` (409), `AI_ACTION_LEDGER_UNAVAILABLE`/`AI_EXPOSURE_STORE_UNAVAILABLE` (503),
 `AI_GATEWAY_RATE_LIMITED` (429), Gateway/scene/agent failures (502), store unavailable
 (503), and Gateway/scene timeouts (504).
 
