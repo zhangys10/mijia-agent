@@ -4,6 +4,18 @@ from mijia_agent.command_console import ConsoleAgentTools
 from mijia_agent.models import AgentError
 from mijia_assistant.models import AssistantContext, AssistantError, CapabilityResult
 
+HOME_METRICS = (
+    "temperature",
+    "humidity",
+    "co2",
+    "formaldehyde",
+    "pm25",
+    "pm10",
+    "tvoc",
+    "pressure",
+    "battery",
+)
+
 
 class _HomeReadCapability:
     risk: Literal["home_read"] = "home_read"
@@ -22,7 +34,7 @@ class _HomeReadCapability:
         return ctx.automation_token.get_secret_value()
 
     @staticmethod
-    def _validate_args(args: dict, allowed: set[str], projection: dict[str, list[str]]) -> dict:
+    def _validate_args(args: dict, allowed: set[str]) -> dict:
         if not isinstance(args, dict) or set(args) - allowed:
             raise AssistantError("INVALID_TOOL_ARGUMENTS")
         normalized = {}
@@ -30,31 +42,29 @@ class _HomeReadCapability:
             value = args.get(key)
             if value is None:
                 continue
-            options = projection.get(key, [])
-            limit = min(
-                len(options),
-                40 if key == "kinds" else 20 if key == "rooms" else 9 if key == "metrics" else 3,
+            limit = 40 if key == "kinds" else 20 if key == "rooms" else 9 if key == "metrics" else 3
+            max_length = 40 if key == "kinds" else 200
+            options = (
+                set(HOME_METRICS)
+                if key == "metrics"
+                else {"on", "off", "unknown"}
+                if key == "states"
+                else None
             )
             if (
                 not isinstance(value, list)
                 or len(value) > limit
-                or any(not isinstance(item, str) or item not in options for item in value)
+                or any(
+                    not isinstance(item, str)
+                    or not item
+                    or len(item) > max_length
+                    or (options is not None and item not in options)
+                    for item in value
+                )
             ):
                 raise AssistantError("INVALID_TOOL_ARGUMENTS")
             normalized[key] = list(dict.fromkeys(value))
         return normalized
-
-    async def _manifest(self, ctx: AssistantContext, operation: str):
-        try:
-            manifest = await self.tools.capabilities_v1(
-                self._token(ctx), ctx.request_id, ctx.home_selector
-            )
-        except AgentError as error:
-            raise AssistantError(error.code, error.status) from None
-        if not any(item.name == operation and item.available for item in manifest.capabilities):
-            raise AssistantError("AI_CAPABILITY_UNAVAILABLE", 403)
-        projection = manifest.projection.model_dump()
-        return projection
 
 
 class HomeEnvironmentCapability(_HomeReadCapability):
@@ -73,17 +83,7 @@ class HomeEnvironmentCapability(_HomeReadCapability):
                 "type": "array",
                 "items": {
                     "type": "string",
-                    "enum": [
-                        "temperature",
-                        "humidity",
-                        "co2",
-                        "formaldehyde",
-                        "pm25",
-                        "pm10",
-                        "tvoc",
-                        "pressure",
-                        "battery",
-                    ],
+                    "enum": list(HOME_METRICS),
                 },
                 "maxItems": 9,
             },
@@ -91,12 +91,7 @@ class HomeEnvironmentCapability(_HomeReadCapability):
     }
 
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
-        projection = await self._manifest(ctx, self.name)
-        filters = self._validate_args(
-            args,
-            {"rooms", "metrics"},
-            {"rooms": projection["rooms"], "metrics": projection["measurementTypes"]},
-        )
+        filters = self._validate_args(args, {"rooms", "metrics"})
         try:
             status = await self.tools.invoke_home_environment(
                 self._token(ctx), ctx.request_id, ctx.home_selector, filters
@@ -147,16 +142,7 @@ class DeviceStatusCapability(_HomeReadCapability):
     }
 
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
-        projection = await self._manifest(ctx, self.name)
-        filters = self._validate_args(
-            args,
-            {"rooms", "kinds", "states"},
-            {
-                "rooms": projection["rooms"],
-                "kinds": projection["deviceKinds"],
-                "states": ["on", "off", "unknown"],
-            },
-        )
+        filters = self._validate_args(args, {"rooms", "kinds", "states"})
         try:
             status = await self.tools.invoke_device_status(
                 self._token(ctx), ctx.request_id, ctx.home_selector, filters

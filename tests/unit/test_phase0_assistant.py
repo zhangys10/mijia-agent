@@ -14,7 +14,7 @@ from mijia_agent.app import create_app
 from mijia_agent.config import Settings
 from mijia_agent.gateway import Gateway
 from mijia_agent.llm_log import LlmCallLogger
-from mijia_agent.models import AgentError, HomeCapabilities, HomeStatus
+from mijia_agent.models import AgentError, HomeStatus
 from mijia_assistant.capabilities import (
     CaiyunWeatherCapability,
     CapabilityRegistry,
@@ -381,22 +381,7 @@ def test_tool_result_error_returns_readable_answer_without_model_retry():
 def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     class FailingHomeTools:
         async def capabilities_v1(self, user_token, request_id, home):
-            assert (user_token, request_id, home) == ("opaque-token", "req_phase0_test", "home")
-            return HomeCapabilities.model_validate(
-                {
-                    "contextVersion": "1",
-                    "exposureRevision": "exp_test",
-                    "capabilities": [
-                        {"name": "get_home_environment", "available": True, "risk": "home_read"}
-                    ],
-                    "projection": {
-                        "rooms": ["客厅"],
-                        "measurementTypes": ["temperature"],
-                        "deviceKinds": [],
-                        "sceneSearchAvailable": False,
-                    },
-                }
-            )
+            pytest.fail("the console validates the exposure during tool invocation")
 
         async def invoke_home_environment(self, user_token, request_id, home, arguments):
             assert (user_token, request_id, home, arguments) == (
@@ -422,25 +407,10 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     assert result.tool_events[0].status == "error"
 
 
-def test_home_capability_intersects_filters_with_console_manifest_and_redacts_readings_from_model():
+def test_home_capability_forwards_bounded_filters_and_redacts_readings_from_model():
     class HomeTools:
         async def capabilities_v1(self, user_token, request_id, home):
-            assert (user_token, request_id, home) == ("opaque-token", "req_phase0_test", "home")
-            return HomeCapabilities.model_validate(
-                {
-                    "contextVersion": "1",
-                    "exposureRevision": "exp_test",
-                    "capabilities": [
-                        {"name": "get_home_environment", "available": True, "risk": "home_read"}
-                    ],
-                    "projection": {
-                        "rooms": ["客厅"],
-                        "measurementTypes": ["temperature"],
-                        "deviceKinds": [],
-                        "sceneSearchAvailable": False,
-                    },
-                }
-            )
+            pytest.fail("the console validates the exposure during tool invocation")
 
         async def invoke_home_environment(self, user_token, request_id, home, arguments):
             assert arguments == {"rooms": ["客厅"], "metrics": ["temperature"]}
@@ -484,29 +454,32 @@ def test_home_capability_intersects_filters_with_console_manifest_and_redacts_re
     assert result.client_data["groups"][0]["latest"]["value"] == 25.5
 
 
-def test_home_capability_rejects_filters_outside_exposure_projection():
+def test_home_capability_propagates_console_exposure_rejection():
     class HomeTools:
         async def capabilities_v1(self, user_token, request_id, home):
-            return HomeCapabilities.model_validate(
-                {
-                    "contextVersion": "1",
-                    "exposureRevision": "exp_test",
-                    "capabilities": [
-                        {"name": "get_home_environment", "available": True, "risk": "home_read"}
-                    ],
-                    "projection": {
-                        "rooms": ["客厅"],
-                        "measurementTypes": ["temperature"],
-                        "deviceKinds": [],
-                        "sceneSearchAvailable": False,
-                    },
-                }
+            pytest.fail("the console validates the exposure during tool invocation")
+
+        async def invoke_home_environment(self, user_token, request_id, home, arguments):
+            assert arguments == {"rooms": ["书房"]}
+            raise AgentError("AI_INVALID_REQUEST", 400)
+
+    with pytest.raises(AssistantError, match="AI_INVALID_REQUEST"):
+        asyncio.run(
+            HomeEnvironmentCapability(HomeTools()).invoke(
+                context(automation_token=SecretStr("opaque-token")), {"rooms": ["书房"]}
             )
+        )
+
+
+def test_home_capability_rejects_invalid_metric_before_console_call():
+    class HomeTools:
+        async def invoke_home_environment(self, *args):
+            pytest.fail("invalid arguments must not reach the console")
 
     with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
         asyncio.run(
             HomeEnvironmentCapability(HomeTools()).invoke(
-                context(automation_token=SecretStr("opaque-token")), {"rooms": ["书房"]}
+                context(automation_token=SecretStr("opaque-token")), {"metrics": ["unsupported"]}
             )
         )
 

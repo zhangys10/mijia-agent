@@ -50,7 +50,6 @@ from .config import Settings
 
 ACKNOWLEDGEMENT = "USE PRODUCTION SERVICES"
 DEFAULT_ENV_FILE = Path("adapters/edgeone/.env")
-DEFAULT_CONSOLE_REPO = Path("..") / "mijia-web-console"
 CONSOLE_TOKEN_SCRIPT = Path("scripts") / "generate-automation-token.ts"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -275,15 +274,16 @@ def generate_token(
     days: int,
     home: str | None,
     token_out: Path | None,
+    env_file: Path,
     popen=None,
 ) -> str:
     """Delegate token sealing to the console repo's offline generator.
 
     The cookie is passed through a private temporary file (never argv or env);
-    the generator auto-loads the console project's own `.env` for the sealing
-    secrets, so the Python process never touches Xiaomi session decryption or
-    the console's token secrets. The generated token returns through a pipe and
-    is never echoed or logged.
+    the generator loads the pulled production env file for the token secret
+    and its own checkout's .env for a missing Xiaomi session secret. Python
+    never reads either secret or decrypts the session. The generated token
+    returns through a pipe and is never echoed or logged.
     """
 
     if not (1 <= days <= 90):
@@ -306,6 +306,8 @@ def generate_token(
             str(script),
             "--session-file",
             str(cookie_path),
+            "--env-file",
+            str(env_file.expanduser().resolve()),
             "--days",
             str(days),
         ]
@@ -318,9 +320,9 @@ def generate_token(
                 env={
                     "PATH": os.environ.get("PATH", os.defpath),
                     "HOME": os.environ.get("HOME", ""),
-                    # The token's AES-GCM AAD binds the environment name; the
-                    # production console resolves APP_ENV || NODE_ENV, so the
-                    # generator must seal with the same env or verification fails.
+                    # Token AES-GCM AAD binds APP_ENV. Match the production
+                    # verifier even if the console checkout's .env says development.
+                    "APP_ENV": "production",
                     "NODE_ENV": "production",
                 },
                 cwd=str(console_repo),
@@ -333,8 +335,17 @@ def generate_token(
             raise CliError("Could not run the console token generator") from error
         _stdout, stderr = process.communicate()
         if process.returncode != 0:
-            detail = (stderr or "").strip().splitlines()
-            hint = detail[-1] if detail else "unknown error"
+            if "XIAOMI_SESSION_INVALID:" in (stderr or ""):
+                hint = (
+                    "XIAOMI_SESSION_INVALID: refresh the production xiaomi_session cookie "
+                    "or pull the matching production XIAOMI_SESSION_SECRET"
+                )
+            elif "AI_AUTOMATION_TOKEN_SECRET must be set" in (stderr or ""):
+                hint = "AI_AUTOMATION_TOKEN_SECRET is missing from the selected env file"
+            elif "Cannot read env file:" in (stderr or ""):
+                hint = "the selected env file could not be read by the console generator"
+            else:
+                hint = "unexpected Node error in the console token generator"
             raise CliError(f"Console token generator failed: {hint}")
         token = _stdout.strip().splitlines()[-1] if _stdout.strip() else ""
         if not token.startswith("v1.") or len(token) > MAX_AUTOMATION_TOKEN:
@@ -351,6 +362,14 @@ def generate_token(
             raise CliError(f"Could not write token file: {token_out}") from error
         print(f"Token written to {token_out} (mode 0600).")
     return token
+
+
+def resolve_console_repo(console_repo: Path | None) -> Path:
+    """Resolve the explicitly selected web-console checkout."""
+
+    if console_repo is None:
+        raise CliError("Token generation needs the web-console checkout; pass --console-repo PATH")
+    return console_repo.expanduser().resolve()
 
 
 def ensure_port_available(host: str, port: int) -> None:
@@ -408,7 +427,6 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
     )
     command = [
         sys.executable,
-        "-P",
         "-m",
         "uvicorn",
         "mijia_agent.app:create_app",
@@ -422,7 +440,7 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
         "warning",
     ]
     try:
-        return subprocess.Popen(command, env=child_env, stdin=subprocess.DEVNULL)
+        return subprocess.Popen(command, cwd=package_root, env=child_env, stdin=subprocess.DEVNULL)
     except OSError as error:
         raise CliError("Could not start the local agent") from error
 
@@ -864,7 +882,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--console-repo",
         type=Path,
-        default=DEFAULT_CONSOLE_REPO,
+        default=None,
         help="Path to the mijia-web-console checkout that owns token generation",
     )
     parser.add_argument(
@@ -936,11 +954,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "generate-token":
             cookie = load_cookie(args.cookie_file)
             generate_token(
-                args.console_repo,
+                resolve_console_repo(args.console_repo),
                 cookie,
                 args.token_days,
                 args.home,
                 args.token_out,
+                args.env_file,
             )
             if args.token_out is None:
                 print(
@@ -956,31 +975,23 @@ def main(argv: list[str] | None = None) -> int:
             # Non-interactive: generate the token from the provided cookie file.
             cookie = load_cookie(args.cookie_file)
             token = generate_token(
-                args.console_repo,
+                resolve_console_repo(args.console_repo),
                 cookie,
                 args.token_days,
                 args.home,
                 None,
+                args.env_file,
             )
         else:
-            # Offer cookie-based generation inline; a path or 'token' pastes a ready-made token.
-            choice = input(
-                "Paste the xiaomi_session cookie to generate a token, or enter a token file "
-                "path, or type 'token' to paste a ready-made token: "
-            ).strip()
-            if choice == "token":
-                token = load_token(None)
-            elif choice and Path(choice).expanduser().is_file():
-                token = load_token(Path(choice).expanduser())
-            else:
-                cookie = load_cookie(None, prompt_fn=lambda _prompt: choice)
-                token = generate_token(
-                    args.console_repo,
-                    cookie,
-                    args.token_days,
-                    args.home,
-                    None,
-                )
+            cookie = load_cookie(None)
+            token = generate_token(
+                resolve_console_repo(args.console_repo),
+                cookie,
+                args.token_days,
+                args.home,
+                None,
+                args.env_file,
+            )
         ensure_port_available(args.host, args.port)
         log_dir, log_path = private_log_path()
         env["AI_LLM_LOG_PATH"] = str(log_path)

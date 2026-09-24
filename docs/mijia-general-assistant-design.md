@@ -771,7 +771,7 @@ Both endpoints resolve the canonical automation-token envelope into one internal
 }
 ```
 
-The agent owns the model-facing JSON Schemas and intersects its known, versioned capability definitions with this manifest. It must not inject arbitrary remote descriptions or schemas into the model prompt. The console decides availability and authorization; the agent decides how a known capability is presented to the model.
+The agent owns the model-facing JSON Schemas and never injects arbitrary remote descriptions or schemas into the model prompt. The manifest is available when a client needs discovery. A selected read tool makes one `tools:invoke` request; the console checks current availability, authorization, and exposure in that request. The console reuses one device discovery for inventory validation and the selected collector. For environment reads, it collects all exposed metrics once and applies requested room/metric filters to the sanitized snapshot locally. The agent validates bounded argument shapes before sending them, while the console checks every filter against the current exposure projection.
 
 `tools:invoke` uses a strict union keyed by a known operation:
 
