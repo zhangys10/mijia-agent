@@ -5,6 +5,7 @@
   "engines": { "node": ">=22.13.0" },
   "scripts": {
     "build": "node scripts/sync-python.mjs",
+    "dev:local": "node --experimental-strip-types scripts/local-agent-server.mjs",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs"
   }
 }

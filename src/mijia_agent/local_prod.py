@@ -1,8 +1,8 @@
 """Run the local Python agent against the configured production dependencies.
 
 This is a deliberately explicit live-integration tool. It starts the real ASGI app on
-loopback and calls its public ``POST /ai/command`` boundary; it never bypasses the
-production console's execution policy.
+loopback and calls its canonical ``POST /ai/assistant`` boundary; it never bypasses the
+production console's home exposure or execution policy.
 """
 
 import argparse
@@ -515,6 +515,7 @@ def send_assistant(
     text: str,
     conversation_id: str | None,
     home: str | None,
+    channel: str = "web",
 ) -> tuple[dict, str]:
     key = "local-prod-" + secrets.token_hex(16)
     print(f"Request-Key: {key}")
@@ -522,7 +523,7 @@ def send_assistant(
         response = client.post(
             base_url + "/ai/assistant",
             headers={"Authorization": "Bearer " + token, "Idempotency-Key": key},
-            json=assistant_payload(text, conversation_id, home),
+            json=assistant_payload(text, conversation_id, home, channel),
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as error:
@@ -545,10 +546,28 @@ def send_assistant(
     return body, key
 
 
-def print_assistant_response(body: dict) -> None:
+def print_assistant_response(
+    body: dict, channel: str = "web", expect_tool: str | None = None
+) -> None:
     answer = body.get("answer")
     if not isinstance(answer, dict) or not isinstance(answer.get("text"), str):
         raise CliError("Agent returned an invalid assistant response")
+    speech_text = None
+    if channel in {"siri", "voice"}:
+        speech_text = answer.get("speechText")
+        if not isinstance(speech_text, str) or len(speech_text) > 280:
+            raise CliError("Agent did not return a bounded speechText for the selected channel")
+    if expect_tool is not None:
+        events = body.get("toolEvents")
+        if not isinstance(events, list) or not any(
+            isinstance(event, dict)
+            and event.get("name") == expect_tool
+            and event.get("status") in {"success", "partial"}
+            for event in events
+        ):
+            raise CliError(f"Expected successful home read tool was not observed: {expect_tool}")
+    if speech_text is not None:
+        print(f"speechText: {speech_text}")
     print(f"outcome: {body.get('outcome')}")
     print(f"answer: {answer['text']}")
     for event in body.get("toolEvents") or []:
@@ -602,6 +621,8 @@ def run_assistant_repl(
     token: str,
     one_shot: str | None,
     home: str | None,
+    channel: str = "web",
+    expect_tool: str | None = None,
     input_fn=input,
     client_factory=httpx.Client,
 ) -> None:
@@ -617,8 +638,10 @@ def run_assistant_repl(
                     break
             if not text or text in {"/quit", "/exit"}:
                 break
-            body, _key = send_assistant(client, base_url, token, text, conversation_id, home)
-            print_assistant_response(body)
+            body, _key = send_assistant(
+                client, base_url, token, text, conversation_id, home, channel
+            )
+            print_assistant_response(body, channel, expect_tool)
             if isinstance(body.get("conversationId"), str):
                 conversation_id = body["conversationId"]
             if one_shot is not None:
@@ -856,6 +879,17 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token-file", type=Path)
     parser.add_argument("--message", help="Send one prompt and exit instead of opening a REPL")
     parser.add_argument(
+        "--channel",
+        choices=("web", "siri", "voice", "automation"),
+        default="web",
+        help="Assistant channel to include in the canonical turn request",
+    )
+    parser.add_argument(
+        "--expect-tool",
+        choices=("get_home_environment", "get_device_status"),
+        help="Require this exposed home-read tool to complete successfully (requires --message)",
+    )
+    parser.add_argument(
         "--idempotency-key",
         help=(
             "Use an explicit idempotency key with --message; only for the same live agent "
@@ -889,6 +923,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run" and args.profile != "live-read":
             raise CliError("run currently requires --profile live-read")
+        if args.expect_tool and (args.command != "run" or not args.message):
+            raise CliError("--expect-tool requires run --message")
+        if args.channel != "web" and args.command != "run":
+            raise CliError("--channel is only supported by run")
         env = build_environment(args.env_file)
         settings = production_settings(env)
         print(target_summary(settings, args.host, args.port))
@@ -952,7 +990,14 @@ def main(argv: list[str] | None = None) -> int:
             process = start_agent(env, args.host, args.port)
             base_url = f"http://{args.host}:{args.port}"
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
-            run_assistant_repl(base_url, token, args.message, args.home)
+            run_assistant_repl(
+                base_url,
+                token,
+                args.message,
+                args.home,
+                args.channel,
+                args.expect_tool,
+            )
         except (CliError, KeyboardInterrupt) as error:
             primary_error = error
             raise

@@ -82,6 +82,10 @@ The CLI starts the real ASGI app on loopback and shuts it down on exit. See
 [the live test guide](docs/local-prod-test.md) for cookie/token files, retained logs,
 expected execution-gate behavior, and operational warnings.
 
+For a local Console → Agent → Python → Console round trip with a deterministic fake Gateway
+and no real model calls, see the companion Console repository's
+[local integration guide](../mijia-web-console/docs/local-integration-test.md).
+
 ## EdgeOne adapter
 
 `adapters/edgeone/` contains the thin TypeScript shell needed by the existing

@@ -82,6 +82,26 @@ For one prompt and exit:
 mijia-agent-local-prod run --profile live-read --message '客厅温度是多少？'
 ```
 
+To make the live-read check assert that the exposure-filtered home tool actually ran,
+require a successful event for that capability:
+
+```bash
+mijia-agent-local-prod run --profile live-read --message '客厅温度是多少？' --expect-tool get_home_environment
+mijia-agent-local-prod run --profile live-read --message '客厅灯开着吗？' --expect-tool get_device_status
+```
+
+The command exits with an error if the requested tool is absent or did not complete as
+`success` or `partial`; it never retries. To exercise the short Siri rendering contract,
+select `--channel siri` (or `voice`); the CLI requires and displays a `speechText` of at
+most 280 characters:
+
+```bash
+mijia-agent-local-prod run --profile live-read --channel siri --message '客厅温度是多少？' --expect-tool get_home_environment
+```
+
+These commands use the real configured model and production home data, so each incurs the
+same cost and privacy impact as any other live-read run.
+
 ## Secure token files
 
 `run` generates a fresh token in memory by default (paste the cookie at the hidden

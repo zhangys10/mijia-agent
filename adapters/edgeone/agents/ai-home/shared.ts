@@ -54,6 +54,7 @@ export async function authorize(context: Context) {
   const automationToken = required(body.automationToken, 8192);
   const scopes = body.scopes;
   if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== "ai:chat") throw new Error("AI_INVALID_REQUEST");
+  if (body.channel !== undefined && !["web", "siri", "voice", "automation"].includes(String(body.channel))) throw new Error("AI_INVALID_REQUEST");
   const toolSecret = context.env.AI_TOOLS_INTERNAL_SECRET;
   if (!toolSecret || toolSecret.length < 32) throw new Error("AI_AGENT_UNAVAILABLE");
   // The console alone opens the opaque automation token.  This is deliberately
