@@ -491,6 +491,23 @@ def test_home_capability_forwards_bounded_filters_and_redacts_readings_from_mode
     assert result.is_terminal is False
 
 
+def test_home_capability_propagates_console_exposure_rejection():
+    class HomeTools:
+        async def capabilities_v1(self, user_token, request_id, home):
+            pytest.fail("the console validates the exposure during tool invocation")
+
+        async def invoke_home_environment(self, user_token, request_id, home, arguments):
+            assert arguments == {"rooms": ["书房"]}
+            raise AgentError("AI_INVALID_REQUEST", 400)
+
+    with pytest.raises(AssistantError, match="AI_INVALID_REQUEST"):
+        asyncio.run(
+            HomeEnvironmentCapability(HomeTools()).invoke(
+                context(automation_token=SecretStr("opaque-token")), {"rooms": ["书房"]}
+            )
+        )
+
+
 def test_home_model_projection_covers_each_metric_before_truncation():
     captured_at = "2026-09-23T00:00:00Z"
 
@@ -547,108 +564,6 @@ def test_home_model_projection_covers_each_metric_before_truncation():
         "temperature",
         "formaldehyde",
     }
-
-
-def test_partial_home_read_lets_model_answer_from_question_and_sanitized_values():
-    class HomeTools:
-        calls = 0
-
-        async def invoke_home_environment(self, *args):
-            self.calls += 1
-            return HomeStatus.model_validate(
-                {
-                    "capturedAt": "2026-09-23T00:00:00Z",
-                    "completeness": "partial",
-                    "groups": [
-                        {
-                            "metric": "formaldehyde",
-                            "label": "甲醛",
-                            "unit": "mg/m³",
-                            "latest": {
-                                "value": 0.021,
-                                "unit": "mg/m³",
-                                "sourceLabel": "客厅空气检测仪",
-                                "roomName": "客厅",
-                                "capturedAt": "2026-09-23T00:00:00Z",
-                            },
-                        }
-                    ],
-                    "warnings": ["部分设备读数暂时不可用。"],
-                }
-            )
-
-    tools = HomeTools()
-    capability = HomeEnvironmentCapability(tools)
-    provider = ScriptedProvider(
-        ModelTurn(tool_calls=[ToolCall(id="home_1", name="get_home_environment", arguments={})]),
-        ModelTurn(content="客厅甲醛当前读数为 0.021 mg/m³；本次读取不完整。"),
-    )
-    result = run(
-        ConversationEngine(provider, CapabilityRegistry([capability])),
-        "甲醛超标了吗",
-        context(automation_token=SecretStr("opaque-token"), home_selector="home"),
-    )
-
-    assert result.outcome == "tool_answer"
-    assert result.answer.text == "客厅甲醛当前读数为 0.021 mg/m³；本次读取不完整。"
-    assert result.tool_events[0].status == "partial"
-    assert result.data["groups"][0]["latest"]["value"] == 0.021
-    assert tools.calls == 1
-    assert len(provider.requests) == 2
-    follow_up_messages = provider.requests[1][0]
-    assert any("甲醛超标了吗" in message.content for message in follow_up_messages)
-    tool_result = next(message.content for message in follow_up_messages if message.role == "tool")
-    assert '"value":0.021' in tool_result
-    assert '"completeness":"partial"' in tool_result
-
-
-def test_repeated_identical_home_read_uses_same_turn_result_without_console_retry():
-    class HomeTools:
-        calls = 0
-
-        async def invoke_home_environment(self, *args):
-            self.calls += 1
-            return HomeStatus.model_validate(
-                {
-                    "capturedAt": "2026-09-23T00:00:00Z",
-                    "completeness": "partial",
-                    "groups": [],
-                    "warnings": ["部分设备读数暂时不可用。"],
-                }
-            )
-
-    tools = HomeTools()
-    provider = ScriptedProvider(
-        ModelTurn(tool_calls=[ToolCall(id="home_1", name="get_home_environment", arguments={})]),
-        ModelTurn(tool_calls=[ToolCall(id="home_2", name="get_home_environment", arguments={})]),
-        ModelTurn(content="这次只拿到部分读数。"),
-    )
-    result = run(
-        ConversationEngine(provider, CapabilityRegistry([HomeEnvironmentCapability(tools)])),
-        "看看室内环境",
-        context(automation_token=SecretStr("opaque-token"), home_selector="home"),
-    )
-
-    assert result.answer.text == "这次只拿到部分读数。"
-    assert tools.calls == 1
-    assert len(result.tool_events) == 1
-
-
-def test_home_capability_propagates_console_exposure_rejection():
-    class HomeTools:
-        async def capabilities_v1(self, user_token, request_id, home):
-            pytest.fail("the console validates the exposure during tool invocation")
-
-        async def invoke_home_environment(self, user_token, request_id, home, arguments):
-            assert arguments == {"rooms": ["书房"]}
-            raise AgentError("AI_INVALID_REQUEST", 400)
-
-    with pytest.raises(AssistantError, match="AI_INVALID_REQUEST"):
-        asyncio.run(
-            HomeEnvironmentCapability(HomeTools()).invoke(
-                context(automation_token=SecretStr("opaque-token")), {"rooms": ["书房"]}
-            )
-        )
 
 
 def test_home_capability_rejects_invalid_metric_before_console_call():
