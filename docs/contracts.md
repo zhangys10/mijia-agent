@@ -68,7 +68,7 @@ token only after a home capability is selected.
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "risk", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until approval and executor gates are complete |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Requires current low-risk approval, matching revision, explicit command, server-derived action scope, and console ledger claim; deployment execution flag remains off until operational gates pass |
 
 Scene discovery returns a content revision hash and normalized action summaries. The
 agent only offers currently approved scenes classified `risk: "low"` to the action
@@ -143,10 +143,11 @@ Devices without a readable power property (locks, sensors) report `state: "unkno
 never enter model messages, replies, or conversation history. The reply text is a
 generic statement; the browser assistant renders the per-room device card.
 
-The future executor must refresh the scene, validate alias/home/approval revision/risk,
-claim a durable execution receipt, and return only `status` and `message`. It must not
-return real scene IDs, DIDs, raw Xiaomi records or credentials. Scope permission and
-an idempotency key alone do not establish that an action is safe.
+The console executor refreshes the scene, validates alias/home/approval revision/risk,
+claims a durable execution receipt, and returns only `status` and `message`. It does not
+return real scene IDs, DIDs, raw Xiaomi records or credentials. Scope permission and an
+idempotency key alone do not establish that an action is safe. The deployment execution
+flag remains off until the operational gates in `docs/TODO.md` pass.
 
 The existing `/api/xiaomi/control` and `/api/xiaomi/scenes/run` are **not** generic
 LLM tools. They use different browser/session assumptions and expose raw device IDs.
@@ -203,8 +204,8 @@ Executor status always wins over model text. Public error codes: `LLM_TIMEOUT` (
 `LLM_PROVIDER_ERROR` (502), `MI_CLOUD_ERROR` (502), `DEVICE_TIMEOUT` (504),
 `AUTOMATION_TOKEN_EXPIRED`/`AUTOMATION_TOKEN_INVALID` (401), `AI_HOME_NOT_FOUND` (404),
 `IDEMPOTENCY_CONFLICT` (409), `INVALID_REQUEST` (400), `UNAUTHORIZED` (401), and
-`AI_SCENE_EXECUTION_DISABLED` (403) — activation remains closed until the durable
-executor claim (M2). `GET /ai/command` returns an info summary. Every model call is
+`AI_SCENE_EXECUTION_DISABLED` (403) — activation remains closed until the deployed
+executor gates in `docs/TODO.md` pass. `GET /ai/command` returns an info summary. Every model call is
 logged as JSONL (`AI_LLM_LOG_PATH`, stdout by default): request payload, bounded
 response excerpt, usage, latency, `llm_call_failed` on error — no tokens, bindings,
 gateway keys, or principal IDs ever appear.

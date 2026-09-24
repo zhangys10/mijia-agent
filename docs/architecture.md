@@ -14,8 +14,9 @@ flowchart TD
     Makers --> Store["Makers conversation store"]
 ```
 
-The physical-execution edge is the target design. The first companion patch permits
-authorization and discovery only; activation returns `AI_SCENE_EXECUTION_DISABLED`.
+The physical-execution edge now includes per-home exposure, approved low-risk scene
+revisions, and a console-owned durable action ledger. The deployment-wide execution
+flag remains disabled until the operational gates in `docs/TODO.md` pass.
 
 | Responsibility | Owner after extraction | Reason |
 |---|---|---|
@@ -87,9 +88,10 @@ is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 
 Only `list_scenes`, `get_home_status`, `get_device_status`, and `activate_scene` are
 recognized. Additional arguments, multiple tool calls, unknown aliases and invented tools
-fail closed. Phase 1 registers only read capabilities. A future activation also requires a
-server-derived `scene:activate` scope, exposure/revision checks, a conservative
-explicit-current-command check, and the console-owned durable action claim.
+fail closed. Scene candidates are limited to approved low-risk revisions; activation also
+requires a server-derived `scene:activate` scope, a direct present-tense command, and the
+console's fresh exposure/revision checks and durable action claim. The deployment-wide
+execution flag remains off until the deployed operational gates pass.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
 environment snapshot from the console tools API only after the model selects the tool,
 returns it as the structured `Result.homeStatus` field, and keeps measurements out of
