@@ -68,16 +68,16 @@ token only after a home capability is selected.
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "risk", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Requires current low-risk approval, matching revision, explicit command, server-derived action scope, and console ledger claim; deployment execution flag remains off until operational gates pass |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Rejected by the canonical automation-token ingress until it receives a per-request console-issued action scope. The deprecated command router also rejects before dispatch. Do not enable physical writes until all operational gates pass. |
 
-Scene discovery returns a content revision hash and normalized action summaries. The
-agent only offers currently approved scenes classified `risk: "low"` to the action
-model schema. The console re-reads the scene and rejects a stale revision or any scene
-that cannot be proven to target one unambiguous light/switch using supported
-power/brightness/color-temperature actions. Scene aliases, action summaries and
-revision hashes are not authorization. The separate per-home scene-action approval
-must be on, and the deployment-wide `AI_SCENE_EXECUTION_ENABLED` flag remains off
-until the operational gates in `docs/TODO.md` are complete.
+Scene discovery returns a content revision hash and normalized action summaries. Only
+the deprecated command router currently receives the old activation schema, and it
+rejects every write before dispatch. The canonical assistant does not register a scene
+action capability. The automation-token tools ingress rejects direct activation without
+a per-request console-issued action scope. Scene aliases, action summaries and revision
+hashes are not authorization. Keep `AI_SCENE_EXECUTION_ENABLED` unset until the deployed
+operational gates in `docs/TODO.md` pass and action registration moves to the canonical
+assistant.
 When enabled, a positive Xiaomi scene-run acknowledgment is reported as “request
 submitted”; it is not a device-state readback and must not be rendered as confirmed
 physical completion. A lost response or missing receipt is `AI_EXECUTION_STATUS_UNKNOWN`

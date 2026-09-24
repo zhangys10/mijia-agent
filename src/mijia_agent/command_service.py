@@ -1,14 +1,8 @@
-"""AI home command service: the Python replacement for console ``/api/ai/command``.
+"""Deprecated scene command router retained for controlled retirement.
 
-Decision behavior is ported from the console's ``lib/ai`` (via
-``command_rules``) so the replacement does not change outcomes: non-thinking
-model calls (temperature 0, ``enable_thinking: false``), a single
-``activate_scene(sceneId, replyMessage)`` tool, deterministic home-scene
-fallback only when the model call fails, intent recovery when the model claims
-execution without calling the tool, and executor results winning over
-model-predicted success text. Scenes are always queried live from the console
-using the caller's opaque automation token — never from configuration. The
-token is forwarded opaquely and is never opened, logged, or echoed here.
+It may classify legacy scene intent for compatibility, but it never dispatches
+physical writes. New assistant behavior belongs in the canonical conversation
+engine after the action-scope and deployment gates in the design docs pass.
 """
 
 import json
@@ -143,47 +137,10 @@ class CommandService:
                 decisionSource=decision.decisionSource,
                 llmOutput=sanitize_llm_output(decision.llm_output, scenes),
             )
-        if not idempotency_key:
-            # Tool execution requires Idempotency-Key, exactly like the console route.
-            raise AgentError("INVALID_REQUEST", 400)
-        if body_hash:
-            self.idempotency.start(idempotency_key, body_hash)
-        try:
-            execution = await self.tools.activate_scene(
-                token,
-                request_id,
-                request.home,
-                scene.alias,
-                scene.revision,
-                idempotency_key,
-                body_hash,
-            )
-        except AgentError as error:
-            if body_hash:
-                self.idempotency.fail(idempotency_key, {"code": error.code, "status": error.status})
-            raise
-        # Executor status is authoritative; the reply text is the model's.
-        response = CommandResponse(
-            requestId=request_id,
-            conversationId=conversation_id,
-            conversationReset=state.is_reset,
-            turnIndex=state.turn_index,
-            status="completed" if execution["status"] == "success" else "partial_success",
-            intent="activate_scene",
-            sceneId=scene.alias,
-            sceneName=scene.name,
-            message=reset_prefix + execution["message"],
-            execution={
-                "status": execution["status"],
-                "succeeded": execution["succeeded"],
-                "failed": execution["failed"],
-            },
-            decisionSource=decision.decisionSource,
-            llmOutput=sanitize_llm_output(decision.llm_output, scenes),
-        )
-        if body_hash:
-            self.idempotency.complete(idempotency_key, response.model_dump(exclude_none=True))
-        return response
+        # This router is deprecated and frozen. Phase 3 physical writes remain
+        # unavailable here until the canonical assistant action-scope flow is
+        # deployed and its operational gates in docs/TODO.md have passed.
+        raise AgentError("AI_SCENE_EXECUTION_DISABLED", 403)
 
     async def _decide(
         self,

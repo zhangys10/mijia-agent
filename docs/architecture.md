@@ -86,12 +86,12 @@ allowlist, fixed non-thinking mode, bounded output and timeout. No production mo
 is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 2026-09-17; this remains a deployment observation, not a source default.
 
-Only `list_scenes`, `get_home_status`, `get_device_status`, and `activate_scene` are
-recognized. Additional arguments, multiple tool calls, unknown aliases and invented tools
-fail closed. Scene candidates are limited to approved low-risk revisions; activation also
-requires a server-derived `scene:activate` scope, a direct present-tense command, and the
-console's fresh exposure/revision checks and durable action claim. The deployment-wide
-execution flag remains off until the deployed operational gates pass.
+The canonical assistant currently registers only read capabilities; it does not expose
+`activate_scene`. The deprecated command router may recognize legacy scene intents, but
+always rejects them before dispatch. The automation-token tools ingress also rejects
+activation because it does not yet carry a per-request console-issued action scope. Scene
+discovery still filters to approved low-risk revisions, while physical action registration
+and canonical present-intent checks remain pending until the deployed operational gates pass.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
 environment snapshot from the console tools API only after the model selects the tool.
 The exposure-filtered snapshot is returned as structured `Result.homeStatus` data and

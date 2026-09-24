@@ -1019,12 +1019,15 @@ Run it against every model allowlist change.
 - Revision-bound approval and explicit execution gate.
 - One low-risk real-scene end-to-end validation last.
 
-Implementation progress (2026-09-24): per-home scene-action consent, normalized scene
-summaries, revision-bound approval, conservative light/switch risk filtering, Python
-present-intent checks, and the console Blob claim/outcome ledger are implemented across
-the companion repositories. Remote writes remain deployment-gated; see
-[`docs/TODO.md`](./TODO.md) for the remaining EdgeOne concurrency, recovery, and final
-end-to-end checks. `AI_SCENE_EXECUTION_ENABLED` must remain unset until those checks pass.
+Implementation progress (2026-09-25): per-home scene-action consent, normalized scene
+summaries, revision-bound approval, conservative light/switch risk filtering, and the
+console Blob claim/outcome ledger are implemented across the companion repositories.
+Live catalog loading now resolves device rooms and MIoT capabilities before risk
+classification, and approval revisions include private target/action material without
+exposing it in model projections. Physical writes remain unavailable through the
+deprecated command router and the automation-token tools route. Canonical action-scope
+registration and present-intent enforcement remain pending until the deployment gates
+in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset until then.
 
 **Exit:** exact-once claim semantics, visible unknown outcomes, and no blind retries.
 

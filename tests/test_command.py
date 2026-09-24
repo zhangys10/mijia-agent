@@ -214,23 +214,17 @@ def test_sanitize_llm_output_keeps_scene_reference_readable():
 # --- command_service: decision flow -----------------------------------------
 
 
-def test_tool_call_response_shape_and_executor_wins():
+def test_deprecated_router_rejects_scene_writes_even_for_direct_intent():
     tools = FakeConsoleTools()
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias, "好的，已开启回家模式")
-    result = run(service(gateway, tools))
-    assert result.status == "completed"
-    assert result.intent == "activate_scene"
-    assert result.sceneName == "回家模式"
-    assert result.message == "好的，已开启回家模式"
-    assert result.execution == {"status": "success", "succeeded": 2, "failed": 0}
-    assert result.decisionSource == "llm"
-    assert tools.calls[-1][4] == HOME_SCENE.alias
-    assert tools.calls[-1][5] == HOME_SCENE.revision
-    assert tools.calls[-1][6] == IDEMPOTENCY_KEY
+    with pytest.raises(AgentError) as caught:
+        run(service(gateway, tools))
+    assert (caught.value.code, caught.value.status) == ("AI_SCENE_EXECUTION_DISABLED", 403)
+    assert [call[0] for call in tools.calls] == ["list"]
 
 
-def test_partial_execution_status_wins_over_model_success_text():
+def test_deprecated_router_never_dispatches_or_reports_model_claimed_success():
     tools = FakeConsoleTools()
     tools.execution = {
         "status": "partial_success",
@@ -240,9 +234,10 @@ def test_partial_execution_status_wins_over_model_success_text():
     }
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias, "已全部成功")
-    result = run(service(gateway, tools))
-    assert result.status == "partial_success"
-    assert result.execution["failed"] == 1
+    with pytest.raises(AgentError) as caught:
+        run(service(gateway, tools))
+    assert caught.value.code == "AI_SCENE_EXECUTION_DISABLED"
+    assert [call[0] for call in tools.calls] == ["list"]
 
 
 def test_no_action_returns_not_understood_with_sanitized_reply():
@@ -258,22 +253,20 @@ def test_no_action_returns_not_understood_with_sanitized_reply():
     assert tools.calls[0][0] == "list" and tools.calls[0][1] == TOKEN
 
 
-def test_model_claiming_execution_requires_an_explicit_user_command():
+def test_legacy_model_claim_cannot_execute_a_scene():
     gateway = FakeGateway()
     gateway.response = {"choices": [{"message": {"content": "好的，已经为您打开明亮模式"}}]}
-    result = run(service(gateway), text="执行明亮模式")
-    assert result.intent == "activate_scene"
-    assert result.sceneName == "明亮模式"
-    assert result.decisionSource == "llm"
+    with pytest.raises(AgentError) as caught:
+        run(service(gateway), text="执行明亮模式")
+    assert caught.value.code == "AI_SCENE_EXECUTION_DISABLED"
 
 
-def test_gateway_failure_falls_back_deterministically_for_home_text():
+def test_legacy_fallback_cannot_execute_a_scene():
     gateway = FakeGateway()
     gateway.error = AgentError("AI_GATEWAY_TIMEOUT", 504)
-    result = run(service(gateway))
-    assert result.decisionSource == "deterministic_fallback"
-    assert result.sceneName == "回家模式"
-    assert result.message == "好的，已开启回家模式"
+    with pytest.raises(AgentError) as caught:
+        run(service(gateway))
+    assert caught.value.code == "AI_SCENE_EXECUTION_DISABLED"
 
 
 def test_gateway_failure_without_home_text_maps_to_public_codes():
@@ -313,12 +306,12 @@ def test_disallowed_tool_call_fails_closed_without_fallback():
     assert caught.value.code == "LLM_PROVIDER_ERROR"
 
 
-def test_tool_call_requires_idempotency_key():
+def test_legacy_router_write_remains_disabled_without_an_idempotency_key():
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias)
     with pytest.raises(AgentError) as caught:
         asyncio.run(service(gateway).run(TOKEN, request(), None, "hash"))
-    assert (caught.value.code, caught.value.status) == ("INVALID_REQUEST", 400)
+    assert (caught.value.code, caught.value.status) == ("AI_SCENE_EXECUTION_DISABLED", 403)
 
 
 def test_conversation_reset_prefix_and_new_conversation_id():
@@ -397,7 +390,8 @@ def test_llm_call_is_logged_with_request_response_and_latency():
         return httpx.Response(200, json=tool_call_response(HOME_SCENE.alias, content=None))
 
     gateway = Gateway(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)), logger)
-    asyncio.run(service(gateway).run(TOKEN, request(), IDEMPOTENCY_KEY, "hash"))
+    with pytest.raises(AgentError, match="AI_SCENE_EXECUTION_DISABLED"):
+        asyncio.run(service(gateway).run(TOKEN, request(), IDEMPOTENCY_KEY, "hash"))
     record = json.loads(sink.getvalue().splitlines()[0])
     assert record["event"] == "llm_call"
     assert record["request"]["messages"]
@@ -427,16 +421,16 @@ def test_llm_call_failure_is_logged():
 # --- idempotency -------------------------------------------------------------
 
 
-def test_idempotency_replays_completed_response():
+def test_legacy_refusal_never_starts_an_idempotency_claim():
     store = IdempotencyStore()
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias)
     tools = FakeConsoleTools()
     svc = service(gateway, tools, idempotency=store)
-    first = asyncio.run(svc.run(TOKEN, request(), IDEMPOTENCY_KEY, "hash"))
-    second = asyncio.run(svc.run(TOKEN, request(), IDEMPOTENCY_KEY, "hash"))
-    assert second.model_dump() == first.model_dump()
-    assert len(tools.calls) == 2  # one list + one activate
+    for _ in range(2):
+        with pytest.raises(AgentError, match="AI_SCENE_EXECUTION_DISABLED"):
+            asyncio.run(svc.run(TOKEN, request(), IDEMPOTENCY_KEY, "hash"))
+    assert len(tools.calls) == 2  # two catalog reads and no scene dispatch
 
 
 def test_idempotency_conflict_on_different_body():
@@ -444,7 +438,7 @@ def test_idempotency_conflict_on_different_body():
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias)
     svc = service(gateway, FakeConsoleTools(), idempotency=store)
-    asyncio.run(svc.run(TOKEN, request(), IDEMPOTENCY_KEY, "hash1"))
+    store.start(IDEMPOTENCY_KEY, "hash1")
     with pytest.raises(AgentError) as caught:
         asyncio.run(svc.run(TOKEN, request(text="到家了"), IDEMPOTENCY_KEY, "hash2"))
     assert (caught.value.code, caught.value.status) == ("IDEMPOTENCY_CONFLICT", 409)
@@ -637,7 +631,6 @@ def test_route_rejects_oversized_token_and_invalid_body():
         assert response.json()["code"] == "AUTOMATION_TOKEN_INVALID"
         response = command_post(client, {"text": ""})
         assert response.status_code == 400
-        assert response.json()["code"] == "INVALID_REQUEST"
         response = command_post(client, {"text": "x" * 201})
         assert response.status_code == 400
         response = command_post(client, {"text": "好的", "locale": "en-US"})
@@ -688,7 +681,7 @@ def test_route_returns_202_while_processing():
         assert response.json()["status"] == "processing"
 
 
-def test_route_requires_key_only_when_action_is_selected():
+def test_route_never_executes_legacy_action_even_with_a_malformed_key():
     gateway = FakeGateway()
     gateway.response = {"choices": [{"message": {"content": "好的，需要什么帮助？"}}]}
     with TestClient(route_app(gateway=gateway)) as client:
@@ -698,20 +691,22 @@ def test_route_requires_key_only_when_action_is_selected():
     gateway.response = tool_call_response(HOME_SCENE.alias)
     with TestClient(route_app(gateway=gateway)) as client:
         response = command_post(client, {"text": "我回家了"}, key="short")
-        assert response.status_code == 400
-        assert response.json()["code"] == "INVALID_REQUEST"
+        assert response.status_code == 403
+        assert response.json()["code"] == "AI_SCENE_EXECUTION_DISABLED"
 
 
-def test_route_replays_idempotent_completed_response():
+def test_route_does_not_cache_a_legacy_scene_execution_refusal_as_success():
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias)
     app = route_app(gateway=gateway)
     with TestClient(app) as client:
         first = command_post(client, {"text": "我回家了"})
         second = command_post(client, {"text": "我回家了"})
-        assert first.status_code == 200
-        assert second.status_code == 200
-        assert second.json() == first.json()
+        assert first.status_code == second.status_code == 403
+        assert first.json()["code"] == second.json()["code"] == "AI_SCENE_EXECUTION_DISABLED"
+        assert first.json()["requestId"] is None
+        assert second.json()["requestId"] is None
+        assert len(gateway.requests) == 2
 
 
 def test_route_oversized_body_is_rejected():
