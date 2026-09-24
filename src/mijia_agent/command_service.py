@@ -104,7 +104,11 @@ class CommandService:
                 return CommandResponse.model_validate(replay)
             if lookup == FAILED:
                 failure = self.idempotency.failure(idempotency_key)
-                if failure and isinstance(failure.get("code"), str) and type(failure.get("status")) is int:
+                if (
+                    failure
+                    and isinstance(failure.get("code"), str)
+                    and type(failure.get("status")) is int
+                ):
                     raise AgentError(failure["code"], failure["status"])
                 raise AgentError("AI_EXECUTION_STATUS_UNKNOWN", 409)
 
@@ -146,7 +150,13 @@ class CommandService:
             self.idempotency.start(idempotency_key, body_hash)
         try:
             execution = await self.tools.activate_scene(
-                token, request_id, request.home, scene.alias, scene.revision, idempotency_key, body_hash
+                token,
+                request_id,
+                request.home,
+                scene.alias,
+                scene.revision,
+                idempotency_key,
+                body_hash,
             )
         except AgentError as error:
             if body_hash:
@@ -216,7 +226,9 @@ class CommandService:
             reply = args.get("replyMessage")
             if reply is not None and not isinstance(reply, str):
                 raise _ModelResponseRejected("invalid replyMessage")
-            scene = next((s for s in scenes if s.risk == "low" and s.alias == args.get("sceneId")), None)
+            scene = next(
+                (s for s in scenes if s.risk == "low" and s.alias == args.get("sceneId")), None
+            )
             if scene is None:
                 raise _ModelResponseRejected("unknown scene")
             return CommandDecision(

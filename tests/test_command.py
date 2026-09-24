@@ -34,7 +34,9 @@ SCENES = [
         description="已审核低风险场景",
         actionCount=1,
         risk="low",
-        actionSummaries=[{"room": "客厅", "device": "客厅灯", "actions": [{"label": "电源", "value": "开启"}]}],
+        actionSummaries=[
+            {"room": "客厅", "device": "客厅灯", "actions": [{"label": "电源", "value": "开启"}]}
+        ],
     ),
     Scene(
         alias="scene_fedcba9876543210",
@@ -42,7 +44,9 @@ SCENES = [
         description="已审核低风险场景",
         actionCount=2,
         risk="low",
-        actionSummaries=[{"room": "客厅", "device": "客厅灯", "actions": [{"label": "亮度", "value": "明亮"}]}],
+        actionSummaries=[
+            {"room": "客厅", "device": "客厅灯", "actions": [{"label": "亮度", "value": "明亮"}]}
+        ],
     ),
 ]
 HOME_SCENE = SCENES[0]
@@ -85,8 +89,12 @@ class FakeConsoleTools:
         self.calls.append(("list", token, request_id, home))
         return self.scenes
 
-    async def activate_scene(self, token, request_id, home, alias, revision, idempotency_key, request_hash):
-        self.calls.append(("activate", token, request_id, home, alias, revision, idempotency_key, request_hash))
+    async def activate_scene(
+        self, token, request_id, home, alias, revision, idempotency_key, request_hash
+    ):
+        self.calls.append(
+            ("activate", token, request_id, home, alias, revision, idempotency_key, request_hash)
+        )
         return self.execution
 
 

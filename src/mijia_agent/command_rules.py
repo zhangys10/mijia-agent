@@ -81,9 +81,19 @@ def explicit_current_scene_command(text: str, scene: Scene) -> bool:
     if not name:
         return False
     if normalized in {
-        f"打开{name}", f"开启{name}", f"执行{name}", f"运行{name}", f"启动{name}",
-        f"切换到{name}", f"切换成{name}", f"帮我开{name}", f"帮我打开{name}",
-        f"帮我开启{name}", f"帮我执行{name}", f"请打开{name}", f"请开启{name}",
+        f"打开{name}",
+        f"开启{name}",
+        f"执行{name}",
+        f"运行{name}",
+        f"启动{name}",
+        f"切换到{name}",
+        f"切换成{name}",
+        f"帮我开{name}",
+        f"帮我打开{name}",
+        f"帮我开启{name}",
+        f"帮我执行{name}",
+        f"请打开{name}",
+        f"请开启{name}",
     }:
         return True
     home_phrases = {"我回家了", "我到家了", "我回来了", "回家", "到家", "进门"}
@@ -104,7 +114,14 @@ def find_fallback_scene(text: str, scenes: list[Scene]) -> Scene | None:
         return None
     if not any(phrase in normalized for phrase in FALLBACK_PHRASES):
         return None
-    return next((s for s in scenes if s.risk == "low" and any(phrase in s.name for phrase in FALLBACK_PHRASES)), None)
+    return next(
+        (
+            s
+            for s in scenes
+            if s.risk == "low" and any(phrase in s.name for phrase in FALLBACK_PHRASES)
+        ),
+        None,
+    )
 
 
 def recover_intent(
@@ -261,7 +278,8 @@ def user_content(text: str, locale: str, timezone: str, scenes: list[Scene]) -> 
                         for action in s.actionSummaries
                     ],
                 }
-                for s in scenes if s.risk == "low"
+                for s in scenes
+                if s.risk == "low"
             ],
         },
         ensure_ascii=False,
