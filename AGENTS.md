@@ -18,6 +18,7 @@ Historical documents in docs/source-snapshot are evidence, not the current imple
 - Update requirements locks with dependency changes; retain fake-only test credentials.
 - Validate Python with pytest and ruff; validate the Makers adapter with its Node tests.
 - For companion changes, follow the web console's own AGENTS.md and quality gates.
+- When changing `docs/mijia-general-assistant-design.md`, update `docs/mijia-general-assistant-design.zh-CN.md` in the same change, and vice versa; keep both versions aligned.
 - Do not mark mocked integration tests as live EdgeOne, Gateway, KV, or Xiaomi validation.
 
 Do not create commits, push, or deploy unless the user's request authorizes that action.
