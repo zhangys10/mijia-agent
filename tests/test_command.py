@@ -33,12 +33,16 @@ SCENES = [
         name="回家模式",
         description="已审核低风险场景",
         actionCount=1,
+        risk="low",
+        actionSummaries=[{"room": "客厅", "device": "客厅灯", "actions": [{"label": "电源", "value": "开启"}]}],
     ),
     Scene(
         alias="scene_fedcba9876543210",
         name="明亮模式",
         description="已审核低风险场景",
         actionCount=2,
+        risk="low",
+        actionSummaries=[{"room": "客厅", "device": "客厅灯", "actions": [{"label": "亮度", "value": "明亮"}]}],
     ),
 ]
 HOME_SCENE = SCENES[0]
@@ -67,7 +71,12 @@ class FakeConsoleTools:
     def __init__(self):
         self.calls = []
         self.scenes = SCENES
-        self.execution = {"status": "success", "succeeded": 2, "failed": 0}
+        self.execution = {
+            "status": "success",
+            "succeeded": 2,
+            "failed": 0,
+            "message": "好的，已开启回家模式",
+        }
         self.error = None
 
     async def list_scenes(self, token, request_id, home):
@@ -76,8 +85,8 @@ class FakeConsoleTools:
         self.calls.append(("list", token, request_id, home))
         return self.scenes
 
-    async def activate_scene(self, token, request_id, home, alias, idempotency_key):
-        self.calls.append(("activate", token, request_id, home, alias, idempotency_key))
+    async def activate_scene(self, token, request_id, home, alias, revision, idempotency_key, request_hash):
+        self.calls.append(("activate", token, request_id, home, alias, revision, idempotency_key, request_hash))
         return self.execution
 
 
@@ -209,12 +218,18 @@ def test_tool_call_response_shape_and_executor_wins():
     assert result.execution == {"status": "success", "succeeded": 2, "failed": 0}
     assert result.decisionSource == "llm"
     assert tools.calls[-1][4] == HOME_SCENE.alias
-    assert tools.calls[-1][5] == IDEMPOTENCY_KEY
+    assert tools.calls[-1][5] == HOME_SCENE.revision
+    assert tools.calls[-1][6] == IDEMPOTENCY_KEY
 
 
 def test_partial_execution_status_wins_over_model_success_text():
     tools = FakeConsoleTools()
-    tools.execution = {"status": "partial_success", "succeeded": 1, "failed": 1}
+    tools.execution = {
+        "status": "partial_success",
+        "succeeded": 1,
+        "failed": 1,
+        "message": "状态待确认。",
+    }
     gateway = FakeGateway()
     gateway.response = tool_call_response(HOME_SCENE.alias, "已全部成功")
     result = run(service(gateway, tools))
@@ -235,10 +250,10 @@ def test_no_action_returns_not_understood_with_sanitized_reply():
     assert tools.calls[0][0] == "list" and tools.calls[0][1] == TOKEN
 
 
-def test_model_claiming_execution_without_tool_call_is_recovered():
+def test_model_claiming_execution_requires_an_explicit_user_command():
     gateway = FakeGateway()
     gateway.response = {"choices": [{"message": {"content": "好的，已经为您打开明亮模式"}}]}
-    result = run(service(gateway), text="明亮模式")
+    result = run(service(gateway), text="执行明亮模式")
     assert result.intent == "activate_scene"
     assert result.sceneName == "明亮模式"
     assert result.decisionSource == "llm"
@@ -250,7 +265,7 @@ def test_gateway_failure_falls_back_deterministically_for_home_text():
     result = run(service(gateway))
     assert result.decisionSource == "deterministic_fallback"
     assert result.sceneName == "回家模式"
-    assert result.message == "欢迎回家，已经开启回家模式。"
+    assert result.message == "好的，已开启回家模式"
 
 
 def test_gateway_failure_without_home_text_maps_to_public_codes():
@@ -502,9 +517,17 @@ def test_console_activate_timeout_maps_to_device_timeout():
     tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     with pytest.raises(AgentError) as caught:
         asyncio.run(
-            tools.activate_scene(TOKEN, "req_test", None, HOME_SCENE.alias, IDEMPOTENCY_KEY)
+            tools.activate_scene(
+                TOKEN,
+                "req_test",
+                None,
+                HOME_SCENE.alias,
+                HOME_SCENE.revision,
+                IDEMPOTENCY_KEY,
+                "request-hash",
+            )
         )
-    assert caught.value.code == "DEVICE_TIMEOUT"
+    assert caught.value.code == "AI_EXECUTION_STATUS_UNKNOWN"
 
 
 # --- HTTP route contract -----------------------------------------------------
