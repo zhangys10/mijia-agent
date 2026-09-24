@@ -12,7 +12,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentError, DeviceStatus, HomeCapabilities, HomeStatus, Scene
+from .models import AgentError, DeviceStatus, HomeStatus, Scene
 
 _ALLOWED_ERRORS = {
     "AI_UNAUTHENTICATED": 401,
@@ -35,18 +35,6 @@ _ALLOWED_ERRORS = {
 class ConsoleAgentTools:
     def __init__(self, settings: Settings, client: httpx.AsyncClient):
         self.settings, self.client = settings, client
-
-    async def capabilities_v1(
-        self, user_token: str, request_id: str, home: str | None
-    ) -> HomeCapabilities:
-        body: dict = {"requestId": request_id}
-        if home is not None:
-            body["home"] = home
-        result = await self._call_v1("capabilities", user_token, body)
-        try:
-            return HomeCapabilities.model_validate(result)
-        except (TypeError, ValueError, ValidationError):
-            raise AgentError("AI_AGENT_UNAVAILABLE") from None
 
     async def invoke_home_environment(
         self, user_token: str, request_id: str, home: str | None, arguments: dict
@@ -105,6 +93,7 @@ class ConsoleAgentTools:
                 "AI_CAPABILITY_UNAVAILABLE": 403,
                 "AI_PREVIEW_READ_ONLY": 403,
                 "AI_INVALID_REQUEST": 400,
+                "AI_EXPOSURE_STORE_UNAVAILABLE": 503,
             }
             try:
                 code = response.json().get("code")
@@ -180,26 +169,6 @@ class ConsoleAgentTools:
             return scenes
         except (KeyError, TypeError, ValueError, ValidationError):
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
-
-    async def get_home_status(
-        self, user_token: str, request_id: str, home: str | None
-    ) -> HomeStatus:
-        manifest = await self.capabilities_v1(user_token, request_id, home)
-        if not any(
-            item.name == "get_home_environment" and item.available for item in manifest.capabilities
-        ):
-            raise AgentError("AI_CAPABILITY_UNAVAILABLE", 403)
-        return await self.invoke_home_environment(user_token, request_id, home, {})
-
-    async def get_device_status(
-        self, user_token: str, request_id: str, home: str | None
-    ) -> DeviceStatus:
-        manifest = await self.capabilities_v1(user_token, request_id, home)
-        if not any(
-            item.name == "get_device_status" and item.available for item in manifest.capabilities
-        ):
-            raise AgentError("AI_CAPABILITY_UNAVAILABLE", 403)
-        return await self.invoke_device_status(user_token, request_id, home, {})
 
     async def activate_scene(
         self,
