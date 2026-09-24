@@ -343,7 +343,14 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             history = [ModelMessage(role=item.role, content=item.content) for item in turn.history]
             result = await app.state.assistant_engine.run(context, turn.message, history)
             await app.state.conversation_repository.append(context, turn.message, result)
-            event = next((item for item in result.tool_events if item.status == "success"), None)
+            event = next(
+                (
+                    item
+                    for item in reversed(result.tool_events)
+                    if item.status in {"success", "partial"}
+                ),
+                None,
+            )
             intent = (
                 {
                     "get_home_environment": "get_home_status",
@@ -355,11 +362,21 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             body = {
                 "requestId": result.request_id,
                 "conversationId": result.conversation_id,
+                "status": result.status,
+                "outcome": result.outcome,
+                "answer": {
+                    "text": result.answer.text,
+                    "speak": result.answer.speak,
+                    "continueConversation": result.answer.continue_conversation,
+                },
                 "message": result.answer.text,
                 "speak": result.answer.text[:280]
                 if turn.channel in {"siri", "voice"}
                 else result.answer.text,
                 "intent": intent,
+                "toolEvents": [
+                    {"name": item.name, "status": item.status} for item in result.tool_events
+                ],
                 "usage": {
                     "promptTokens": result.usage.prompt_tokens,
                     "completionTokens": result.usage.completion_tokens,
@@ -367,6 +384,21 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                     "estimated": result.usage.estimated,
                 },
             }
+            if result.data is not None:
+                body["data"] = result.data
+                if result.data.get("type") == "home_environment":
+                    body["homeStatus"] = {
+                        key: value for key, value in result.data.items() if key != "type"
+                    }
+                elif result.data.get("type") == "device_status":
+                    body["deviceStatus"] = {
+                        key: value for key, value in result.data.items() if key != "type"
+                    }
+            if event is not None and intent in {"get_home_status", "get_device_status"}:
+                body["tool"] = {
+                    "name": intent,
+                    "status": "partial_success" if event.status == "partial" else "success",
+                }
             return JSONResponse(body, headers=headers)
         except (ValueError, ValidationError):
             return JSONResponse(

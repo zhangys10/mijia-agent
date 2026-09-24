@@ -97,11 +97,38 @@ class HomeEnvironmentCapability(_HomeReadCapability):
                 self._token(ctx), ctx.request_id, ctx.home_selector, filters
             )
         except AgentError as error:
-            raise AssistantError(error.code, error.status) from None
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        readings = []
+        group_sources = [
+            group.readings or ([group.latest] if group.latest is not None else [])
+            for group in status.groups
+        ]
+        for index in range(max((len(source) for source in group_sources), default=0)):
+            for group, source in zip(status.groups, group_sources, strict=True):
+                if len(readings) >= 32:
+                    break
+                if index >= len(source):
+                    continue
+                reading = source[index]
+                readings.append(
+                    {
+                        "metric": group.metric,
+                        "label": group.label,
+                        "value": reading.value,
+                        "unit": reading.unit,
+                        "roomName": reading.roomName[:80] if reading.roomName else None,
+                        "capturedAt": reading.capturedAt,
+                        "freshness": reading.freshness,
+                    }
+                )
+            if len(readings) >= 32:
+                break
         content = {
             "completeness": status.completeness,
-            "availableMetrics": len(status.groups),
             "capturedAt": status.capturedAt,
+            "readings": readings,
+            "truncated": sum(len(source) for source in group_sources) > len(readings),
+            "warnings": status.warnings,
         }
         display = status.model_dump(exclude_none=True)
         return CapabilityResult(
@@ -148,12 +175,31 @@ class DeviceStatusCapability(_HomeReadCapability):
                 self._token(ctx), ctx.request_id, ctx.home_selector, filters
             )
         except AgentError as error:
-            raise AssistantError(error.code, error.status) from None
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        devices = []
+        for room in status.rooms:
+            for item in room.items:
+                if len(devices) >= 40:
+                    break
+                devices.append(
+                    {
+                        "room": room.room[:80],
+                        "name": item.name[:80],
+                        "kind": item.kind,
+                        "state": item.state,
+                        "online": item.online,
+                    }
+                )
+            if len(devices) >= 40:
+                break
+        total_devices = sum(len(room.items) for room in status.rooms)
         content = {
             "completeness": status.completeness,
-            "roomCount": len(status.rooms),
-            "deviceCount": sum(len(room.items) for room in status.rooms),
             "capturedAt": status.capturedAt,
+            "poweredOn": status.poweredOn,
+            "devices": devices,
+            "truncated": total_devices > len(devices),
+            "warnings": status.warnings,
         }
         display = status.model_dump(exclude_none=True)
         return CapabilityResult(

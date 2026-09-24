@@ -91,14 +91,17 @@ fail closed. Phase 1 registers only read capabilities. A future activation also 
 server-derived `scene:activate` scope, exposure/revision checks, a conservative
 explicit-current-command check, and the console-owned durable action claim.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
-environment snapshot from the console tools API only after the model selects the tool,
-returns it as the structured `Result.homeStatus` field, and keeps measurements out of
-reply text and conversation history. The console dashboard uses the same collector, so
-browser UI and agent answers share one read path and one sanitization contract.
+environment snapshot from the console tools API only after the model selects the tool.
+The exposure-filtered snapshot is returned as structured `Result.homeStatus` data and
+as a bounded, sanitized tool result for the model's final answer. Repeated identical
+home reads within one turn reuse the same result. The console dashboard uses the same
+collector, so browser UI and agent answers share one read path and sanitization contract.
 `get_device_status` follows the same read-only pattern for the per-room device on/off
 snapshot ("which lights are on"): the console builds it from the same device sync
 pipeline and lighting model as its home dashboard, Python returns it as
-`Result.deviceStatus`, and states stay out of reply text and conversation history.
+`Result.deviceStatus` and supplies a bounded, sanitized device-state projection to the
+model after selection. Raw DIDs, property addresses, and Xiaomi records never enter the
+model context.
 Negation, conditions, quoted commands and ambiguous language produce clarification.
 The matching grammar is intentionally narrow; broader language requires tests or a
 separate confirmation flow. A model reply never overrides the executor's actual status.
