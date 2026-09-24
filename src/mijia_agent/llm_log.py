@@ -8,6 +8,7 @@ never reach these records. Logging failures must never break a turn.
 """
 
 import json
+import re
 import sys
 import threading
 from datetime import datetime, timezone
@@ -42,5 +43,7 @@ class LlmCallLogger:
     ) -> None:
         record = {"event": "tool_result", "tool": tool_name, "status": status}
         if error_code:
-            record["errorCode"] = error_code[:64]
+            record["errorCode"] = (
+                error_code[:64] if re.fullmatch(r"[A-Z0-9_]{1,64}", error_code) else "TOOL_FAILED"
+            )
         self.log(record)

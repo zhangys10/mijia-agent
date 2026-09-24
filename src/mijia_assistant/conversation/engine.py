@@ -10,6 +10,7 @@ from mijia_assistant.models import (
     AssistantContext,
     AssistantError,
     AssistantResponse,
+    CapabilityResult,
     ModelMessage,
     ToolEvent,
     Usage,
@@ -76,6 +77,7 @@ class ConversationEngine:
         events: list[ToolEvent] = []
         read_count = 0
         per_tool: dict[str, int] = {}
+        read_results: dict[tuple[str, str], CapabilityResult] = {}
         client_data = None
         fallback_text = None
 
@@ -153,45 +155,66 @@ class ConversationEngine:
                     per_tool[call.name] = per_tool.get(call.name, 0) + 1
                     if read_count > self.max_reads or per_tool[call.name] > self.max_reads_per_tool:
                         raise AssistantError("TOOL_BUDGET_EXCEEDED", 400)
-                try:
-                    result = await asyncio.wait_for(
-                        capability.invoke(ctx, call.arguments),
-                        timeout=self._remaining_seconds(ctx),
-                    )
-                except AssistantError as error:
-                    events.append(ToolEvent(name=call.name, status="error"))
-                    self._log_tool_result(call.name, "error", error.code)
-                    return self._tool_error_response(
-                        ctx, events, usage, client_data, error.code, call.name
-                    )
-                except asyncio.TimeoutError:
-                    if self._is_write(capability.risk):
-                        events.append(ToolEvent(name=call.name, status="outcome_unknown"))
-                        self._log_tool_result(call.name, "outcome_unknown", "DEADLINE_EXCEEDED")
-                        return AssistantResponse(
-                            request_id=ctx.request_id,
-                            conversation_id=ctx.conversation_id,
-                            status="completed",
-                            outcome="outcome_unknown",
-                            answer=Answer(
-                                text="The action outcome is unknown. Do not retry automatically."
-                            ),
-                            tool_events=events,
-                            usage=usage,
+                cache_key = None
+                if capability.risk == "home_read":
+                    try:
+                        arguments_key = json.dumps(
+                            call.arguments,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
                         )
-                    events.append(ToolEvent(name=call.name, status="error"))
-                    self._log_tool_result(call.name, "error", "DEADLINE_EXCEEDED")
-                    return self._tool_error_response(
-                        ctx, events, usage, client_data, "DEADLINE_EXCEEDED", call.name
-                    )
-                except Exception:  # noqa: BLE001 -- tool failures become readable assistant replies.
-                    events.append(ToolEvent(name=call.name, status="error"))
-                    self._log_tool_result(call.name, "error", "TOOL_FAILED")
-                    return self._tool_error_response(
-                        ctx, events, usage, client_data, "TOOL_FAILED", call.name
-                    )
-                events.append(ToolEvent(name=call.name, status=result.status))
-                self._log_tool_result(call.name, result.status)
+                    except (TypeError, ValueError):
+                        raise AssistantError("INVALID_TOOL_ARGUMENTS", 400) from None
+                    cache_key = (call.name, arguments_key)
+                reused_read = bool(cache_key and cache_key in read_results)
+                result = read_results.get(cache_key) if cache_key else None
+                if result is None:
+                    try:
+                        result = await asyncio.wait_for(
+                            capability.invoke(ctx, call.arguments),
+                            timeout=self._remaining_seconds(ctx),
+                        )
+                    except AssistantError as error:
+                        events.append(ToolEvent(name=call.name, status="error"))
+                        self._log_tool_result(
+                            call.name, "error", error.diagnostic_code or error.code
+                        )
+                        return self._tool_error_response(
+                            ctx, events, usage, client_data, error.code, call.name
+                        )
+                    except asyncio.TimeoutError:
+                        if self._is_write(capability.risk):
+                            events.append(ToolEvent(name=call.name, status="outcome_unknown"))
+                            self._log_tool_result(call.name, "outcome_unknown", "DEADLINE_EXCEEDED")
+                            return AssistantResponse(
+                                request_id=ctx.request_id,
+                                conversation_id=ctx.conversation_id,
+                                status="completed",
+                                outcome="outcome_unknown",
+                                answer=Answer(
+                                    text="The action outcome is unknown. Do not retry automatically."
+                                ),
+                                tool_events=events,
+                                usage=usage,
+                            )
+                        events.append(ToolEvent(name=call.name, status="error"))
+                        self._log_tool_result(call.name, "error", "DEADLINE_EXCEEDED")
+                        return self._tool_error_response(
+                            ctx, events, usage, client_data, "DEADLINE_EXCEEDED", call.name
+                        )
+                    except Exception:  # noqa: BLE001 -- tool failures become readable assistant replies.
+                        events.append(ToolEvent(name=call.name, status="error"))
+                        self._log_tool_result(call.name, "error", "TOOL_FAILED")
+                        return self._tool_error_response(
+                            ctx, events, usage, client_data, "TOOL_FAILED", call.name
+                        )
+                    if cache_key and result.status in {"success", "partial"}:
+                        read_results[cache_key] = result
+                if not reused_read:
+                    events.append(ToolEvent(name=call.name, status=result.status))
+                    self._log_tool_result(call.name, result.status)
                 if result.client_data is not None:
                     client_data = result.client_data
                 if result.display_text:
@@ -208,11 +231,13 @@ class ConversationEngine:
                         str(detail.get("status", "TOOL_FAILED")),
                         call.name,
                     )
-                self._log_tool_result(call.name, result.status)
                 if self._is_write(capability.risk) or result.is_terminal:
-                    outcome = (
-                        "outcome_unknown" if result.status == "outcome_unknown" else "action_result"
-                    )
+                    if result.status == "outcome_unknown":
+                        outcome = "outcome_unknown"
+                    elif self._is_write(capability.risk):
+                        outcome = "action_result"
+                    else:
+                        outcome = "tool_answer"
                     text = result.display_text or "Action request completed."
                     return AssistantResponse(
                         request_id=ctx.request_id,

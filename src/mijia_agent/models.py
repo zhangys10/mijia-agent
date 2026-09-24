@@ -227,8 +227,15 @@ class Result(StrictModel):
 
 
 class AgentError(Exception):
-    def __init__(self, code: str, status: int = 502, usage: Usage | None = None):
+    def __init__(
+        self,
+        code: str,
+        status: int = 502,
+        usage: Usage | None = None,
+        diagnostic_code: str | None = None,
+    ):
         super().__init__(code)
         self.code = code
         self.status = status
         self.usage = usage
+        self.diagnostic_code = diagnostic_code

@@ -233,6 +233,7 @@ def test_generate_token_delegates_via_private_file(tmp_path):
         30,
         None,
         None,
+        tmp_path / "production.env",
         popen=fake_popen,
     )
 
@@ -241,10 +242,12 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     session_file = Path(command[command.index("--session-file") + 1])
     assert not session_file.exists()  # cookie temp file removed
     assert "pasted-cookie-value" not in " ".join(command)
-    # The console script auto-reads its own .env for the secrets; the agent's
-    # child env must carry nothing sensitive, only the env binding + basics.
+    assert command[command.index("--env-file") + 1] == str((tmp_path / "production.env").resolve())
+    # Node reads the selected token env file and the console's session env;
+    # Python passes only the path and production token binding.
     child_env = captured["env"]
-    assert set(child_env) <= {"PATH", "HOME", "NODE_ENV"}
+    assert set(child_env) <= {"PATH", "HOME", "APP_ENV", "NODE_ENV"}
+    assert child_env["APP_ENV"] == "production"
     assert child_env["NODE_ENV"] == "production"
     assert "AI_AUTOMATION_TOKEN_SECRET" not in child_env
     assert "XIAOMI_SESSION_SECRET" not in child_env
@@ -256,7 +259,43 @@ def test_generate_token_rejects_bad_days(tmp_path):
     script_path.write_text("// stub\n", encoding="utf-8")
 
     with pytest.raises(local_prod.CliError, match="between 1 and 90"):
-        local_prod.generate_token(tmp_path, "cookie", 91, None, None, popen=lambda *_a, **_k: None)
+        local_prod.generate_token(
+            tmp_path,
+            "cookie",
+            91,
+            None,
+            None,
+            tmp_path / "production.env",
+            popen=lambda *_a, **_k: None,
+        )
+
+
+def test_generate_token_reports_cookie_secret_mismatch_without_node_footer(tmp_path):
+    script_path = tmp_path / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("// stub\n", encoding="utf-8")
+
+    def fake_popen(_command, **_kwargs):
+        class Proc:
+            returncode = 1
+
+            def communicate(self):
+                return "", "XIAOMI_SESSION_INVALID: cookie mismatch\nNode.js v24.10.0\n"
+
+        return Proc()
+
+    with pytest.raises(local_prod.CliError, match="XIAOMI_SESSION_INVALID") as caught:
+        local_prod.generate_token(
+            tmp_path,
+            "fake-cookie",
+            30,
+            None,
+            None,
+            tmp_path / "production.env",
+            popen=fake_popen,
+        )
+
+    assert "Node.js" not in str(caught.value)
 
 
 def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
@@ -279,6 +318,7 @@ def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
         30,
         None,
         tmp_path / "token.txt",
+        tmp_path / "production.env",
         popen=fake_popen,
     )
 
@@ -328,6 +368,22 @@ def test_main_generate_token_writes_owner_only_file(tmp_path, monkeypatch, capsy
     assert result == 0
     assert "v1.generated-token" not in capsys.readouterr().out
     assert stat.S_IMODE((tmp_path / "token.txt").stat().st_mode) == 0o600
+
+
+def test_generate_token_requires_explicit_console_repo(tmp_path, monkeypatch, capsys):
+    env_path = tmp_path / ".env"
+    write_env(env_path)
+    cookie_path = tmp_path / "cookie.txt"
+    cookie_path.write_text("pasted-cookie\n", encoding="utf-8")
+    cookie_path.chmod(0o600)
+    monkeypatch.chdir(tmp_path)
+
+    result = local_prod.main(
+        ["generate-token", "--env-file", str(env_path), "--cookie-file", str(cookie_path)]
+    )
+
+    assert result == 2
+    assert "pass --console-repo PATH" in capsys.readouterr().err
 
 
 def test_private_log_path_has_owner_only_permissions():
@@ -588,6 +644,40 @@ def test_run_requires_acknowledgement_before_token_or_process(tmp_path, monkeypa
     assert local_prod.main(["run", "--env-file", str(path)]) == 2
 
 
+def test_run_prompts_for_cookie_without_echo(tmp_path, monkeypatch, capsys):
+    env_path = tmp_path / ".env"
+    write_env(env_path)
+    captured = {}
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("visible cookie prompt"))
+    monkeypatch.setattr(local_prod.getpass, "getpass", lambda _prompt: "fake-cookie")
+
+    def fake_generate(_repo, cookie, _days, _home, _out, _env_file):
+        captured["cookie"] = cookie
+        return "v1.fake-token"
+
+    monkeypatch.setattr(local_prod, "generate_token", fake_generate)
+    monkeypatch.setattr(
+        local_prod,
+        "ensure_port_available",
+        lambda *_args: (_ for _ in ()).throw(local_prod.CliError("stop before network")),
+    )
+
+    result = local_prod.main(
+        [
+            "run",
+            "--env-file",
+            str(env_path),
+            "--console-repo",
+            str(tmp_path),
+            "--i-understand-this-uses-production",
+        ]
+    )
+
+    assert result == 2
+    assert captured["cookie"] == "fake-cookie"
+    assert "fake-cookie" not in str(capsys.readouterr())
+
+
 def test_run_cleans_private_log_when_child_start_fails(tmp_path, monkeypatch):
     env_path = tmp_path / ".env"
     write_env(env_path)
@@ -660,7 +750,8 @@ def test_start_agent_argv_and_env_never_include_automation_token(monkeypatch):
     assert "v1.sentinel-token" not in serialized
     assert "automation-token" not in serialized
     assert "--port" in captured["command"]
-    assert "-P" in captured["command"]
+    assert "-P" not in captured["command"]
+    assert captured["cwd"] == str(Path(local_prod.__file__).resolve().parents[1])
     assert captured["stdin"] is local_prod.subprocess.DEVNULL
     assert captured["env"]["PYTHONPATH"].split(local_prod.os.pathsep)[0] == str(
         Path(local_prod.__file__).resolve().parents[1]
