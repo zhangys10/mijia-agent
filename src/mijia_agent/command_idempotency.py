@@ -79,3 +79,10 @@ class IdempotencyStore:
             if record and record.status == COMPLETED and record.expires_at >= time.monotonic():
                 return record.response
             return None
+
+    def failure(self, key: str) -> dict | None:
+        with self._lock:
+            record = self._records.get(key)
+            if record and record.status == FAILED and record.expires_at >= time.monotonic():
+                return record.response
+            return None

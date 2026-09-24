@@ -152,6 +152,14 @@ flowchart TD
 
 The model may **request** a capability. It never authorizes or executes one. Authorization, exposure, argument validation, risk policy, idempotency, and final outcome are server responsibilities.
 
+### 4.3 Platform independence as a design constraint
+
+EdgeOne is the initial deployment platform. The current implementation may use its runtime and services directly to deliver the product; implementing a second platform or a general plugin framework is not a prerequisite. However, EdgeOne is a replaceable implementation choice, not part of the assistant's business contract. This requirement applies to all external dependencies, not only storage.
+
+Keep conversation rules, capability schemas, authorization policy, exposure semantics, action outcomes, and public channel contracts independent of platform SDK types, headers, storage keys, and deployment layouts. Platform integration belongs at explicit boundaries owned by the repository that uses it: `adapters/edgeone` in this repository, and corresponding server-side adapters in `mijia-web-console`. The runtime entrypoint selects implementations and injects normalized configuration and dependencies. The core must not discover its runtime or select a vendor itself.
+
+Existing direct integrations may remain during incremental delivery, but must be recorded as coupling to remove when that boundary is refactored or replaced. New changes must avoid spreading that coupling into additional business modules. Small interfaces around actual operations are sufficient; do not build a generic SDK abstraction or require multiple production backends in advance. Section 16.3 records the required boundaries, current EdgeOne choices, and replacement criteria. These are design requirements, not a claim that every adapter already exists.
+
 ## 5. Request lifecycle
 
 ### 5.1 Turn processing
@@ -367,7 +375,7 @@ All conditions must pass:
 
 The existing idempotency key remains the request identity, but a key by itself is not an execution guarantee. The console must persist and atomically claim it across workers, deployments, retries, and conversations.
 
-**Decision:** the authoritative ledger runs in `mijia-web-console` on EdgeOne Blob, not EdgeOne KV. Blob provides strong-consistency reads and conditional create through `setJSON(key, value, {onlyIfNew: true})`. KV may serve quotas or caches, but its other edge nodes can read stale values for up to 60 seconds.
+**Initial implementation decision:** the authoritative ledger runs in `mijia-web-console` on EdgeOne Blob, not EdgeOne KV. Blob provides strong-consistency reads and conditional create through `setJSON(key, value, {onlyIfNew: true})`. KV may serve quotas or caches, but its other edge nodes can read stale values for up to 60 seconds. The portable contract is an atomic durable claim, immutable outcome records, and authoritative replay reads; a replacement must preserve those semantics, not reproduce the Blob API. See §16.3 for migration and validation requirements.
 
 The claim key is a digest of `environment + principal + home + idempotency_key`. The immutable claim contains:
 
@@ -426,6 +434,8 @@ Keep persistence behind a repository-owned `ConversationRepository`; do not coup
 - stop/delete/history endpoints call the same repository, so platform replacement remains possible.
 
 This uses Makers storage rather than introducing an external database while preserving the product's two-projection privacy contract. Cross-instance persistence requires EdgeOne CLI 1.6.26 or later.
+
+`context.store` and direct Blob SDK calls are distinct platform integrations. The former supplies platform-managed conversation persistence; the latter is used by console-owned exposure and action storage. Keep both behind their own domain operations rather than exposing either API to the engine. The conversation contract must define ordering, retention, scoped identity, deletion, and failure behavior so a replacement can preserve them independently of Makers conversation IDs and storage layout (§16.3).
 
 Reference: [EdgeOne Makers conversation management](https://cloud.tencent.com/document/product/1552/132787).
 
@@ -837,7 +847,39 @@ Do not infer behavioral compatibility from the provider name or a successful tex
 
 At startup, `AI_GATEWAY_MODEL` must match a validated entry. Changing it is a configuration-only deployment, but production promotion requires rerunning the model contract suite. The engine consumes normalized events and never branches on a vendor name.
 
+The current deployment continues to require the configured Makers AI Gateway. Portability is not permission to add user-supplied keys, direct-provider fallback, or silent failover. A future gateway replacement is an explicit operator-controlled adapter and configuration change with the same credential isolation, model allowlist, usage accounting, and contract validation.
+
 References: [Makers Agent quick start and model selection](https://cloud.tencent.com/document/product/1552/132786) and [Makers Models overview](https://cloud.tencent.com/document/product/1552/132748).
+
+### 16.3 Platform and infrastructure dependencies
+
+The following inventory covers both companion repositories. Boundary names describe target responsibilities; they do not assert that named interfaces have already been implemented. Each integration should document its owner, configuration, required guarantees, normalized errors, and replacement procedure alongside the adapter.
+
+| Dependency | Current EdgeOne integration | Required replaceable boundary and guarantees |
+|---|---|---|
+| HTTP hosting and routing | Console Edge Functions, Makers Agent routes, Python Cloud Functions; file routing and platform path-prefix handling | Ingress adapters translate requests into the canonical assistant/tool contracts. A different HTTP or ASGI host must preserve authentication, body limits, no-store responses, status/error codes, and channel behavior without changing conversation logic. Deployment prefixes and file layout stay outside the core. |
+| Runtime configuration and secrets | Edge/Agent `context.env`, Node `process.env`, Python environment injection, platform bindings and deployment credentials | Entry adapters construct validated configuration and inject it. Shared business modules must not assume a Node global, an Edge context, or an automatically injected binding. Normalize local, test, preview, and production policy explicitly; preserve secret separation and preview's prohibition on model/device access. |
+| Model access | Makers AI Gateway, model identifiers, provider-specific request/stream/usage formats | A model provider normalizes messages, tool calls, stream events, usage, deadlines, and failures. Replacing the gateway preserves the configured model allowlist, bounded loop, credential isolation, and explicit handling of unknown usage; no automatic provider fallback. |
+| Conversation persistence | Makers `context.store` message and state APIs backed by platform Blob | `ConversationRepository` owns display/model projections, scoped conversation identity, ordering, retention, deletion, and replay state. Vendor IDs and schemas are adapter details; deleting a conversation must never delete authoritative action receipts. |
+| Home exposure persistence | Console uses `@edgeone/pages-blob` for per-home consent and exposure records | An exposure repository owns default-deny reads, revisions, audit records, and shared per-home ownership. A replacement preserves authorization and freshness requirements and distinguishes missing records from unavailable storage; it must not accidentally grant access on failure. |
+| Durable action claims | Console Blob conditional creates and strong reads | An action ledger exposes claim, conflict/replay lookup, and outcome recording. Any substitute must prove cross-worker atomic claims and durable authoritative reads, preserve request hashes and immutable receipts, and retain unknown outcomes after crashes/timeouts. Eventually consistent KV and process-local locks cannot satisfy this boundary. |
+| Quota and temporary cache | EdgeOne KV bindings for planned soft quota storage; local/fake stores for development | Quota policy owns reservation, settlement, expiry, and conservative accounting; the store adapter declares its consistency and failure semantics. Cache adapters declare TTL and freshness and cannot become authorization or execution authorities. Replacing infrastructure does not imply deferred quota enforcement is already enabled. |
+| Agent lifecycle and cancellation | Makers conversation headers/IDs, stop/delete routes, active-run cancellation and platform timeouts | A lifecycle adapter maps application conversation IDs and run IDs to platform handles, propagates deadlines/cancellation, and normalizes terminal events. Cancellation never proves a dispatched physical action was undone; replay and outcome rules survive instance changes and platform replacement. |
+| Deployment, service discovery, and observability | `edgeone.json`, CLI/build output, generated Python package copies, platform origins, logs and deployment environments | Keep packaging, route registration, ingress controls, and secret provisioning in deployment adapters/runbooks. Inject service locations; emit application request IDs, normalized errors, latency and usage through a replaceable telemetry boundary. A new host must preserve redaction, trace correlation, timeout budgets, and security controls. |
+
+The same rule applies to non-EdgeOne dependencies: Caiyun/AMap stay behind weather and place-resolution contracts, and Xiaomi access stays behind the console's home capability contract. Product requirements such as explicit action authorization, per-home consent, bounded model access, and sanitized errors remain stable when a service changes.
+
+### 16.4 Replacement and incremental implementation requirements
+
+“Replaceable” means changing adapters, deployment configuration, and an explicit data migration when necessary, without rewriting the conversation engine, capability policy, or Web/Siri contracts. It does not promise a zero-work, zero-downtime, or configuration-only migration for every backend.
+
+1. Record existing direct platform calls and their required semantics before replacing a boundary. Keep current working EdgeOne integrations until the replacement is ready; extract only the interface required by the affected domain operations.
+2. Exercise normalized contracts with local fakes independently of EdgeOne credentials and network access. Separately validate runtime wiring and real backend guarantees, including concurrent claims, persistence across instances, cancellation, and failure behavior. Fake tests cannot certify those operational properties.
+3. Define versioned export/import and identity mapping for conversation history, exposure revisions, audit records, action receipts, and active quota reservations where applicable. Preserve ownership, retention, privacy projections, and unresolved outcomes. Credentials are provisioned separately and never embedded in migration data.
+4. Plan cutover and rollback with one authoritative writer for each action-claim namespace. Reconcile in-flight or uncertain actions before switching executors; never retry a physical write to repair a migration. Rollback must use the same authoritative receipts or a verified reconciliation, so it cannot reopen an already claimed action.
+5. Promote a replacement only after its domain contracts and deployment checks pass. If it cannot provide a required guarantee, keep the affected capability disabled or retain the existing backend; do not silently weaken safety or consistency to fit the new service.
+
+This document update establishes the design constraint and migration criteria only. It does not schedule an immediate platform migration, introduce fallback services, or assert completion of the interface extraction. Future implementation tasks must identify which listed boundaries they touch and record any remaining direct coupling.
 
 ## 17. Security and privacy requirements
 
@@ -977,6 +1019,13 @@ Run it against every model allowlist change.
 - Revision-bound approval and explicit execution gate.
 - One low-risk real-scene end-to-end validation last.
 
+Implementation progress (2026-09-24): per-home scene-action consent, normalized scene
+summaries, revision-bound approval, conservative light/switch risk filtering, Python
+present-intent checks, and the console Blob claim/outcome ledger are implemented across
+the companion repositories. Remote writes remain deployment-gated; see
+[`docs/TODO.md`](./TODO.md) for the remaining EdgeOne concurrency, recovery, and final
+end-to-end checks. `AI_SCENE_EXECUTION_ENABLED` must remain unset until those checks pass.
+
 **Exit:** exact-once claim semantics, visible unknown outcomes, and no blind retries.
 
 ### Phase 4 — Operational hardening
@@ -1017,11 +1066,13 @@ Run it against every model allowlist change.
 19. **Model by validated configuration.** `AI_GATEWAY_MODEL` selects the model, but only exact models passing the contract suite enter the production allowlist.
 20. **Legacy routers are temporary.** Deprecate and freeze them now; remove them after the canonical assistant passes the completion gates and production observation window.
 21. **Reuse the local CLI shell, not its router contract.** `mijia-agent-local-prod` is the Phase 0 operator harness after it targets the canonical engine; legacy `/ai/command` behavior is available only through an explicit deprecated mode, never fallback.
+22. **EdgeOne first, replaceable dependencies.** Current delivery may use EdgeOne directly, while all platform dependencies retain explicit adapter boundaries and replacement criteria in §16.3–16.4. Replacing a service must preserve domain contracts and security guarantees without rewriting the assistant core.
 
 ## 23. Resolved implementation decisions
 
 | Topic | Decision |
 |---|---|
+| Platform portability | EdgeOne is the initial implementation; runtime, configuration, models, storage, quota, lifecycle, deployment, and telemetry remain replaceable at the boundaries in §16.3; extraction may be incremental |
 | Weather | AMap resolves China city/area names server-side; Caiyun Weather v2.6 fetches the result and alerts remain explicitly unsupported |
 | Action identity | Retain the existing idempotency key and bind it to the canonical request hash |
 | Action storage | EdgeOne Blob in `mijia-web-console`; atomic claim with `onlyIfNew`, strong reads, and immutable lifecycle records; never authoritative KV |

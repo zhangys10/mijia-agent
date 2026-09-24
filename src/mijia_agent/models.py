@@ -75,11 +75,25 @@ class AssistantTurn(StrictModel):
         return value
 
 
+class SceneActionDetail(StrictModel):
+    label: Annotated[str, Field(max_length=80)]
+    value: Annotated[str, Field(max_length=80)]
+
+
+class SceneActionSummary(StrictModel):
+    room: Annotated[str | None, Field(default=None, max_length=200)] = None
+    device: Annotated[str | None, Field(default=None, max_length=200)] = None
+    actions: Annotated[list[SceneActionDetail], Field(max_length=12)] = Field(default_factory=list)
+
+
 class Scene(StrictModel):
     alias: Annotated[str, Field(pattern=r"^scene_[a-f0-9]{16}$")]
     name: Annotated[str, Field(min_length=1, max_length=200)]
     description: Annotated[str, Field(max_length=500)]
     actionCount: Annotated[int, Field(ge=0)]
+    revision: Annotated[str, Field(pattern=r"^rev_[a-f0-9]{24}$")] = "rev_000000000000000000000000"
+    risk: Literal["low", "blocked"] = "blocked"
+    actionSummaries: Annotated[list[SceneActionSummary], Field(max_length=32)] = Field(default_factory=list)
 
 
 HomeMetric = Literal[

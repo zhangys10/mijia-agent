@@ -26,6 +26,12 @@ _ALLOWED_ERRORS = {
     "AI_PREVIEW_READ_ONLY": 403,
     "AI_IDEMPOTENCY_CONFLICT": 409,
     "AI_REQUEST_IN_PROGRESS": 409,
+    "AI_EXECUTION_STATUS_UNKNOWN": 409,
+    "AI_ACTION_LEDGER_UNAVAILABLE": 503,
+    "AI_SCENE_REVISION_CHANGED": 409,
+    "AI_SCENE_RISK_BLOCKED": 403,
+    "AI_SCENE_NOT_EXPOSED": 403,
+    "AI_EXPOSURE_STORE_UNAVAILABLE": 503,
     "MI_CLOUD_ERROR": 502,
     "DEVICE_TIMEOUT": 504,
     "AI_AGENT_UNAVAILABLE": 502,
@@ -44,6 +50,7 @@ class ConsoleAgentTools:
         home: str | None,
         arguments: dict,
         idempotency_key: str | None = None,
+        request_hash: str | None = None,
     ) -> dict:
         # The console rejects an explicit null home (it validates any present
         # value as a string), so the key is omitted entirely when unset.
@@ -52,6 +59,8 @@ class ConsoleAgentTools:
             body["home"] = home
         if idempotency_key is not None:
             body["idempotencyKey"] = idempotency_key
+        if request_hash is not None:
+            body["requestHash"] = request_hash
         try:
             response = await self.client.post(
                 self.settings.console_url.rstrip("/") + "/api/ai/tools",
@@ -65,10 +74,14 @@ class ConsoleAgentTools:
             )
         except httpx.TimeoutException:
             raise AgentError(
-                "DEVICE_TIMEOUT" if tool == "activate_scene" else "MI_CLOUD_ERROR", 504
+                "AI_EXECUTION_STATUS_UNKNOWN" if tool == "activate_scene" else "MI_CLOUD_ERROR",
+                409 if tool == "activate_scene" else 504,
             ) from None
         except httpx.HTTPError:
-            raise AgentError("MI_CLOUD_ERROR") from None
+            raise AgentError(
+                "AI_EXECUTION_STATUS_UNKNOWN" if tool == "activate_scene" else "MI_CLOUD_ERROR",
+                409 if tool == "activate_scene" else 502,
+            ) from None
         # Never retry writes: an interrupted response does not mean the action failed.
         if response.status_code != 200 or len(response.content) > 65536:
             try:
@@ -77,11 +90,17 @@ class ConsoleAgentTools:
                 code = None
             if isinstance(code, str) and code in _ALLOWED_ERRORS:
                 raise AgentError(code, _ALLOWED_ERRORS[code])
-            raise AgentError("MI_CLOUD_ERROR")
+            raise AgentError(
+                "AI_EXECUTION_STATUS_UNKNOWN" if tool == "activate_scene" else "MI_CLOUD_ERROR",
+                409 if tool == "activate_scene" else 502,
+            )
         try:
             return response.json()
         except ValueError:
-            raise AgentError("MI_CLOUD_ERROR") from None
+            raise AgentError(
+                "AI_EXECUTION_STATUS_UNKNOWN" if tool == "activate_scene" else "MI_CLOUD_ERROR",
+                409 if tool == "activate_scene" else 502,
+            ) from None
 
     async def list_scenes(self, user_token: str, request_id: str, home: str | None) -> list[Scene]:
         body = await self.call(user_token, request_id, "list_scenes", home, {})
@@ -120,15 +139,18 @@ class ConsoleAgentTools:
         request_id: str,
         home: str | None,
         alias: str,
+        revision: str,
         idempotency_key: str,
+        request_hash: str,
     ) -> dict:
         body = await self.call(
             user_token,
             request_id,
             "activate_scene",
             home,
-            {"sceneId": alias},
+            {"sceneId": alias, "revision": revision},
             idempotency_key,
+            request_hash,
         )
         try:
             status = body["status"]
@@ -142,6 +164,6 @@ class ConsoleAgentTools:
             message = body.get("message", "")
             if not isinstance(message, str) or len(message) > 2000:
                 raise ValueError("invalid message")
-            return {"status": status, "succeeded": succeeded, "failed": failed}
+            return {"status": status, "succeeded": succeeded, "failed": failed, "message": message}
         except (KeyError, TypeError, ValueError, ValidationError):
             raise AgentError("AI_AGENT_UNAVAILABLE") from None
