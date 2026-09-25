@@ -48,6 +48,12 @@ Responses preserve `requestId`, `conversationId`, `message`, `intent`, optional
 `estimated` flag. Public projection happens in the console. Scene status is derived
 from the executor. Error responses contain a stable `code` and, when already known,
 model `usage`; do not drop known usage when implementing failure settlement.
+Successful canonical assistant responses also include `historyAnswer`: a bounded,
+redacted assistant message produced by the Python conversation layer. The Makers
+adapter stores the original user turn and this projection as model history. It must
+not substitute the display `message` or infer redaction from a tool name.
+For each model call, Python presents that history as bounded reference data within
+the current user turn; only the latest user text is an active request for tools.
 
 ## Agent services → console tools
 

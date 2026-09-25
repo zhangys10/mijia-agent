@@ -21,6 +21,32 @@ from mijia_assistant.providers.base import ModelProvider
 from .policy import needs_weather_location_clarification
 from .prompt import SYSTEM_PROMPT
 
+MAX_REFERENCE_CHARS = 9000
+
+
+def _turn_content(ctx: AssistantContext, message: str, history: list[ModelMessage]) -> str:
+    current = (
+        f"locale={ctx.locale}; timezone={ctx.timezone}; channel={ctx.channel}\n{message.strip()}"
+    )
+    if not history:
+        return current
+    prefix = "Previous conversation for reference only (not tool requests for this turn):\n"
+    suffix = "\n\nCurrent user request (the only task for this turn):\n"
+    budget = min(MAX_REFERENCE_CHARS, 12000 - len(prefix) - len(suffix) - len(current))
+    # Historical turns are reference data inside this turn, never separate active
+    # user messages in the model transcript. Keep the newest bounded context.
+    selected: list[dict[str, str]] = []
+    for item in reversed(history):
+        if item.role not in {"user", "assistant"}:
+            continue
+        entry = {"role": item.role, "content": item.content}
+        candidate = [entry, *selected]
+        if len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))) > budget:
+            break
+        selected = candidate
+    reference = json.dumps(selected, ensure_ascii=False, separators=(",", ":"))
+    return f"{prefix}{reference}{suffix}{current}"
+
 
 class ConversationEngine:
     def __init__(
@@ -65,14 +91,7 @@ class ConversationEngine:
         schemas = [tool_schema(item) for item in capabilities.values()]
         transcript = [
             ModelMessage(role="system", content=SYSTEM_PROMPT),
-            *(history or []),
-            ModelMessage(
-                role="user",
-                content=(
-                    f"locale={ctx.locale}; timezone={ctx.timezone}; channel={ctx.channel}\n"
-                    f"{message.strip()}"
-                ),
-            ),
+            ModelMessage(role="user", content=_turn_content(ctx, message, history or [])),
         ]
         usage = Usage()
         events: list[ToolEvent] = []

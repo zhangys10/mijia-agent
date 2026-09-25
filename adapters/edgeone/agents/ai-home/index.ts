@@ -71,7 +71,9 @@ export async function onRequest(context: Context) {
       throw new Error("AI_AGENT_UNAVAILABLE");
     }
     const contractBroken = result.requestId !== requestId
-      || (response.ok && (result.conversationId !== conversationId || typeof result.message !== "string"));
+      || (response.ok && (result.conversationId !== conversationId || typeof result.message !== "string"
+        || typeof result.historyAnswer !== "string" || !result.historyAnswer.trim()
+        || result.historyAnswer.length > 2000));
     if (contractBroken) {
       // A failed upstream status proves no effect, so the retry is safe. A 200 whose
       // body we cannot trust means the turn ran but its outcome is unreadable: uncertain.
@@ -86,17 +88,11 @@ export async function onRequest(context: Context) {
     await store.state.set(receiptKey, { hash: fingerprint, status: "completed", result, httpStatus: response.status });
     if (response.ok) {
       // The turn already succeeded; a history write failing must not fail the reply.
-      const historyAnswer = result.homeStatus !== undefined || result.intent === "get_home_status"
-        ? "Answered the user's current home environment question."
-        : result.deviceStatus !== undefined || result.intent === "get_device_status"
-          ? "Answered the user's current device status question."
-          : String(result.message);
-      const remembered = await Promise.allSettled([
-        store.appendMessage({ conversationId: scopedId, role: "user", content: message }),
-        store.appendMessage({ conversationId: scopedId, role: "assistant", content: historyAnswer }),
-      ]);
-      for (const settled of remembered) {
-        if (settled.status === "rejected") console.error("[ai-home] history append failed after successful turn", settled.reason instanceof Error ? settled.reason.message : settled.reason);
+      try {
+        await store.appendMessage({ conversationId: scopedId, role: "user", content: message });
+        await store.appendMessage({ conversationId: scopedId, role: "assistant", content: String(result.historyAnswer) });
+      } catch (error) {
+        console.error("[ai-home] history append failed after successful turn", error instanceof Error ? error.message : error);
       }
     }
     return json(result, response.status);
