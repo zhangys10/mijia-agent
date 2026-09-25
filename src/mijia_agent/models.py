@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -162,7 +162,40 @@ class HomeCapabilityProjection(StrictModel):
     deviceKinds: Annotated[
         list[Annotated[str, Field(min_length=1, max_length=40)]], Field(max_length=40)
     ] = Field(default_factory=list)
+    roomMetrics: Annotated[
+        dict[
+            Annotated[str, Field(min_length=1, max_length=200)],
+            Annotated[list[HomeMetric], Field(max_length=9)],
+        ],
+        Field(max_length=20),
+    ]
+    roomDeviceKinds: Annotated[
+        dict[
+            Annotated[str, Field(min_length=1, max_length=200)],
+            Annotated[
+                list[Annotated[str, Field(min_length=1, max_length=40)]], Field(max_length=40)
+            ],
+        ],
+        Field(max_length=20),
+    ]
     sceneSearchAvailable: bool
+
+    @model_validator(mode="after")
+    def validate_exposure_lists(self):
+        rooms = set(self.rooms)
+        metrics = set(self.measurementTypes)
+        kinds = set(self.deviceKinds)
+        if any(
+            room not in rooms or any(metric not in metrics for metric in values)
+            for room, values in self.roomMetrics.items()
+        ):
+            raise ValueError("invalid room metrics")
+        if any(
+            room not in rooms or any(kind not in kinds for kind in values)
+            for room, values in self.roomDeviceKinds.items()
+        ):
+            raise ValueError("invalid room device kinds")
+        return self
 
 
 class HomeCapabilities(StrictModel):

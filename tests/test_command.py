@@ -498,15 +498,47 @@ def test_console_token_errors_pass_through(code, status):
 def test_console_v1_token_environment_error_is_not_collapsed_to_agent_unavailable():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/internal/assistant/v1/tools:invoke"
+        assert request.headers["x-request-id"] == "req_806b23a2f1334512aeb6c36fe0effabe"
         return httpx.Response(500, json={"code": "AI_AUTOMATION_TOKEN_ENV_NOT_CONFIGURED"})
 
     tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     with pytest.raises(AgentError) as caught:
-        asyncio.run(tools.invoke_home_environment(TOKEN, "req_test", None, {}))
+        asyncio.run(
+            tools.invoke_home_environment(TOKEN, "req_806b23a2f1334512aeb6c36fe0effabe", None, {})
+        )
     assert (caught.value.code, caught.value.status) == (
         "AI_AUTOMATION_TOKEN_ENV_NOT_CONFIGURED",
         500,
     )
+
+
+def test_console_v1_capabilities_use_the_token_and_validate_the_projection():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/internal/assistant/v1/capabilities"
+        assert request.headers["x-ai-user-token"] == TOKEN
+        assert json.loads(request.content) == {"requestId": "req_test", "home": "我的家"}
+        return httpx.Response(
+            200,
+            json={
+                "contextVersion": "1",
+                "exposureRevision": "exp_test",
+                "capabilities": [
+                    {"name": "get_device_status", "available": True, "risk": "home_read"}
+                ],
+                "projection": {
+                    "rooms": ["客厅"],
+                    "measurementTypes": [],
+                    "deviceKinds": ["light"],
+                    "roomMetrics": {},
+                    "roomDeviceKinds": {"客厅": ["light"]},
+                    "sceneSearchAvailable": False,
+                },
+            },
+        )
+
+    tools = ConsoleAgentTools(settings(), httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    manifest = asyncio.run(tools.capabilities_v1(TOKEN, "req_test", "我的家"))
+    assert manifest.projection.roomDeviceKinds == {"客厅": ["light"]}
 
 
 def test_console_v1_failure_keeps_public_error_safe_and_records_diagnostic_category():

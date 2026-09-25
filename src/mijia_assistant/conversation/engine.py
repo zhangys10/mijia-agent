@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime, timezone
 
+from mijia_agent.models import HomeCapabilities
 from mijia_assistant.capabilities.base import tool_schema
 from mijia_assistant.capabilities.registry import CapabilityRegistry
 from mijia_assistant.models import (
@@ -259,6 +260,13 @@ class ConversationEngine:
                         role="tool", content=serialized, tool_call_id=call.id, name=call.name
                     )
                 )
+                if call.name == "discover_home_exposure":
+                    try:
+                        manifest = HomeCapabilities.model_validate(result.model_content)
+                    except (TypeError, ValueError):
+                        raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502) from None
+                    capabilities = await self.registry.for_context(ctx, manifest)
+                    schemas = [tool_schema(item) for item in capabilities.values()]
             await asyncio.sleep(0)
 
         raise AssistantError("MODEL_ITERATION_LIMIT", 502)
