@@ -55,7 +55,13 @@ def turn(**overrides):
 
 
 SCENE = Scene(
-    alias="scene_0123456789abcdef", name="回家模式", description="已审核低风险场景", actionCount=1
+    alias="scene_0123456789abcdef",
+    name="回家模式",
+    description="当前家庭已授权场景",
+    actionCount=1,
+    actionSummaries=[
+        {"room": "客厅", "device": "客厅灯", "actions": [{"label": "电源", "value": "开启"}]}
+    ],
 )
 USAGE = Usage(promptTokens=10, completionTokens=5, totalTokens=15)
 STATUS_READING = HomeStatusReading(

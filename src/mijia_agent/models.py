@@ -93,8 +93,9 @@ class Scene(StrictModel):
     description: Annotated[str, Field(max_length=500)]
     actionCount: Annotated[int, Field(ge=0)]
     revision: Annotated[str, Field(pattern=r"^rev_[a-f0-9]{24}$")] = "rev_000000000000000000000000"
-    risk: Literal["low", "blocked"] = "blocked"
-    actionSummaries: Annotated[list[SceneActionSummary], Field(max_length=32)] = Field(default_factory=list)
+    actionSummaries: Annotated[list[SceneActionSummary], Field(max_length=32)] = Field(
+        default_factory=list
+    )
 
 
 HomeMetric = Literal[

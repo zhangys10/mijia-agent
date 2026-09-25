@@ -794,7 +794,7 @@ def test_unexpected_tool_exception_returns_readable_answer():
 class TerminalWrite:
     name = "activate_scene"
     description = "Test-only terminal action"
-    risk: Literal["home_write_low"] = "home_write_low"
+    risk: Literal["home_write_scene"] = "home_write_scene"
     input_schema: ClassVar[dict] = {
         "type": "object",
         "additionalProperties": False,

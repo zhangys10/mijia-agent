@@ -47,7 +47,7 @@ class ModelTurn(StrictModel):
 
 
 RiskClass = Literal[
-    "general_read", "home_read", "home_write_low", "home_write_high", "external_write"
+    "general_read", "home_read", "home_write_scene", "home_write_high", "external_write"
 ]
 
 

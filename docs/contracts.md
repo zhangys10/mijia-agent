@@ -71,19 +71,21 @@ token only after a home capability is selected.
 | Tool | Arguments | Current behavior |
 |---|---|---|
 | `authorize` | `{}` | `{ "ok": true, "principalId", "homeId", "scopes": ["ai:chat"] }` after fresh token authentication/home checks; adapter-only, not model-visible |
-| `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "risk", "actionSummaries" }] }` |
+| `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | 403 `AI_SCENE_EXECUTION_DISABLED` until approval and executor gates are complete |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Rejected by the canonical automation-token ingress until it receives a per-request console-issued action scope. The deprecated command router also rejects before dispatch. Do not enable physical writes until all operational gates pass. |
 
 Scene discovery returns a content revision hash and normalized action summaries. The
-agent only offers currently approved scenes classified `risk: "low"` to the action
-model schema. The console re-reads the scene and rejects a stale revision or any scene
-that cannot be proven to target one unambiguous light/switch using supported
-power/brightness/color-temperature actions. Scene aliases, action summaries and
-revision hashes are not authorization. The separate per-home scene-action approval
-must be on, and the deployment-wide `AI_SCENE_EXECUTION_ENABLED` flag remains off
-until the operational gates in `docs/TODO.md` are complete.
+console exposes enabled manual scenes through individual approval or a confirmed
+home-level approval bypass; no static low-risk scene classification is applied. Bypass
+also covers future enabled scenes and scene edits in that home. The deprecated command
+router rejects every write before dispatch. The canonical assistant does not register a
+scene action capability. The automation-token tools ingress rejects direct activation
+without a per-request console-issued action scope. Scene aliases, action summaries and
+revision hashes are not authorization. Keep `AI_SCENE_EXECUTION_ENABLED` unset until the deployed
+operational gates in `docs/TODO.md` pass and action registration moves to the canonical
+assistant.
 When enabled, a positive Xiaomi scene-run acknowledgment is reported as “request
 submitted”; it is not a device-state readback and must not be rendered as confirmed
 physical completion. A lost response or missing receipt is `AI_EXECUTION_STATUS_UNKNOWN`
@@ -151,10 +153,11 @@ model receives a bounded, sanitized projection of the exposed per-room device st
 with the original question and generates the final answer. The same typed snapshot is
 returned as structured client data for the browser.
 
-The future executor must refresh the scene, validate alias/home/approval revision/risk,
-claim a durable execution receipt, and return only `status` and `message`. It must not
-return real scene IDs, DIDs, raw Xiaomi records or credentials. Scope permission and
-an idempotency key alone do not establish that an action is safe.
+The console executor refreshes the scene, validates alias/home/approval revision/risk,
+claims a durable execution receipt, and returns only `status` and `message`. It does not
+return real scene IDs, DIDs, raw Xiaomi records or credentials. Scope permission and an
+idempotency key alone do not establish that an action is safe. The deployment execution
+flag remains off until the operational gates in `docs/TODO.md` pass.
 
 The existing `/api/xiaomi/control` and `/api/xiaomi/scenes/run` are **not** generic
 LLM tools. They use different browser/session assumptions and expose raw device IDs.
@@ -235,22 +238,20 @@ same soft boundary the console had — not durable).
 
 `home` accepts a home ID, exact name, or substring; omitted means the token-bound home,
 then the account's first home. `history` is at most 32 messages; each is trimmed to 300
-chars. Success responses mirror the console `AiCommandResponse`:
+chars. The current route can return a non-action `AiCommandResponse`, for example:
 
 ```json
 { "requestId": "req_…", "conversationId": "conv_…", "conversationReset": false,
-  "turnIndex": 1, "status": "completed", "intent": "activate_scene",
-  "sceneId": "scene_<opaque-alias>", "sceneName": "回家模式",
-  "message": "好的，已开启回家模式", "execution": { "status": "success", "succeeded": 1,
-  "failed": 0 }, "decisionSource": "llm", "llmOutput": "…" }
+  "turnIndex": 1, "status": "not_understood", "intent": "none",
+  "message": "请告诉我具体的场景名称。", "decisionSource": "llm", "llmOutput": "…" }
 ```
 
 Executor status always wins over model text. Public error codes: `LLM_TIMEOUT` (504),
 `LLM_PROVIDER_ERROR` (502), `MI_CLOUD_ERROR` (502), `DEVICE_TIMEOUT` (504),
 `AUTOMATION_TOKEN_EXPIRED`/`AUTOMATION_TOKEN_INVALID` (401), `AI_HOME_NOT_FOUND` (404),
 `IDEMPOTENCY_CONFLICT` (409), `INVALID_REQUEST` (400), `UNAUTHORIZED` (401), and
-`AI_SCENE_EXECUTION_DISABLED` (403) — activation remains closed until the durable
-executor claim (M2). `GET /ai/command` returns an info summary. Every model call is
+`AI_SCENE_EXECUTION_DISABLED` (403) — activation remains closed until the deployed
+executor gates in `docs/TODO.md` pass. `GET /ai/command` returns an info summary. Every model call is
 logged as JSONL (`AI_LLM_LOG_PATH`, stdout by default): request payload, bounded
 response excerpt, usage, latency, `llm_call_failed` on error — no tokens, bindings,
 gateway keys, or principal IDs ever appear.

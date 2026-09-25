@@ -81,9 +81,19 @@ def explicit_current_scene_command(text: str, scene: Scene) -> bool:
     if not name:
         return False
     if normalized in {
-        f"打开{name}", f"开启{name}", f"执行{name}", f"运行{name}", f"启动{name}",
-        f"切换到{name}", f"切换成{name}", f"帮我开{name}", f"帮我打开{name}",
-        f"帮我开启{name}", f"帮我执行{name}", f"请打开{name}", f"请开启{name}",
+        f"打开{name}",
+        f"开启{name}",
+        f"执行{name}",
+        f"运行{name}",
+        f"启动{name}",
+        f"切换到{name}",
+        f"切换成{name}",
+        f"帮我开{name}",
+        f"帮我打开{name}",
+        f"帮我开启{name}",
+        f"帮我执行{name}",
+        f"请打开{name}",
+        f"请开启{name}",
     }:
         return True
     home_phrases = {"我回家了", "我到家了", "我回来了", "回家", "到家", "进门"}
@@ -104,7 +114,10 @@ def find_fallback_scene(text: str, scenes: list[Scene]) -> Scene | None:
         return None
     if not any(phrase in normalized for phrase in FALLBACK_PHRASES):
         return None
-    return next((s for s in scenes if s.risk == "low" and any(phrase in s.name for phrase in FALLBACK_PHRASES)), None)
+    return next(
+        (s for s in scenes if any(phrase in s.name for phrase in FALLBACK_PHRASES)),
+        None,
+    )
 
 
 def recover_intent(
@@ -118,8 +131,6 @@ def recover_intent(
     norm_llm = normalize(llm_output or "")
     claims = CLAIM_EXECUTION.search(norm_llm) is not None
     for scene in scenes:
-        if scene.risk != "low":
-            continue
         scene_name = normalize(scene.name)
         if not scene_name:
             continue
@@ -173,7 +184,7 @@ def sanitize_llm_output(output: str | None, scenes: list[Scene]) -> str | None:
 
 def activate_scene_tool(scenes: list[Scene]) -> dict:
     """The single write tool, verbatim console schema parity."""
-    eligible = [scene for scene in scenes if scene.risk == "low"]
+    eligible = scenes
     return {
         "type": "function",
         "function": {
@@ -236,7 +247,7 @@ def chat_tools(scenes: list[Scene], allow_activate: bool) -> list[dict]:
             },
         },
     ]
-    if allow_activate and any(scene.risk == "low" for scene in scenes):
+    if allow_activate and scenes:
         tools.append(activate_scene_tool(scenes))
     return tools
 
@@ -261,7 +272,7 @@ def user_content(text: str, locale: str, timezone: str, scenes: list[Scene]) -> 
                         for action in s.actionSummaries
                     ],
                 }
-                for s in scenes if s.risk == "low"
+                for s in scenes
             ],
         },
         ensure_ascii=False,

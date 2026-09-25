@@ -73,7 +73,7 @@ Sources:
 
 Home Assistant’s “Prefer handling commands locally” path first attempts the built-in deterministic conversation agent. It uses the LLM only when the local agent does not understand the request. This reduces cost and latency for common commands while preserving general-question capability.
 
-**Adopt selectively:** exact, unambiguous, low-risk commands may use a deterministic fast path, but only through the same policy and action ledger as model-selected actions. The LLM remains the fallback for general questions and ambiguous language.
+**Adopt selectively:** exact, unambiguous commands may use a deterministic fast path, but only through the same policy and action ledger as model-selected actions. The LLM remains the fallback for general questions and ambiguous language.
 
 Source: [Home Assistant Voice Chapter 9](https://www.home-assistant.io/blog/2025/02/13/voice-chapter-9-speech-to-phrase/)
 
@@ -81,7 +81,7 @@ Source: [Home Assistant Voice Chapter 9](https://www.home-assistant.io/blog/2025
 
 Home Assistant converts exposed scripts into callable tools rather than dumping them into a static entity list. Descriptions tell the model what the script does and when to use it.
 
-**Adopt:** treat reviewed Mijia scenes as action tools or discoverable action candidates with clear descriptions and risk metadata. Do not expose a generic Xiaomi API.
+**Adopt:** treat home-authorized Mijia scenes as action tools or discoverable action candidates with clear descriptions and action summaries. Do not expose a generic Xiaomi API.
 
 Source: [Exposing scripts to LLM conversation agents](https://www.home-assistant.io/voice_control/exposing_scripts_to_llms/)
 
@@ -259,7 +259,7 @@ class CapabilityResult:
 |---|---|---|
 | `general_read` | time, weather | Automatic after schema validation |
 | `home_read` | temperature, powered-on devices | Requires authenticated home membership and exposure |
-| `home_write_low` | reviewed scene activation | Requires scope, explicit present intent, durable claim |
+| `home_write_scene` | home-authorized scene activation | Requires scope, explicit present intent, durable claim |
 | `home_write_high` | locks, security, gas | Not registered |
 | `external_write` | messages, purchases | Not registered in initial project |
 
@@ -273,9 +273,9 @@ class CapabilityResult:
 | `get_home_environment` | home read | Temperature, humidity, air quality; exposed sources only |
 | `get_device_status` | home read | Sanitized state projection; no raw IDs |
 | `find_scenes` | home read | Returns matching opaque aliases and descriptions |
-| `activate_scene` | home write low | Accepts only an alias returned by trusted discovery in this turn |
+| `activate_scene` | home scene write | Accepts only an alias returned by trusted discovery in this turn |
 
-`activate_scene` is not exposed when the scope, durable ledger, console execution gate, or approved scene revision is unavailable.
+`activate_scene` is not exposed when the scope, durable ledger, console execution gate, or current scene revision and home authorization are unavailable.
 
 ## 8. General answers and current information
 
@@ -330,7 +330,7 @@ The console should expose a versioned, sanitized projection:
 - room/floor display names and aliases;
 - exposed device display names, kind, room, supported read capabilities;
 - exposed measurement types and source labels;
-- reviewed scene aliases, names, descriptions, revision hashes, and risk class;
+- home-authorized scene aliases, names, descriptions, revision hashes, and action summaries;
 - freshness and completeness metadata.
 
 It must exclude raw device identifiers, MIoT SIID/PIID values, account identifiers, credentials, topology evidence not approved for exposure, and unrestricted action names.
@@ -340,8 +340,8 @@ It must exclude raw device identifiers, MIoT SIID/PIID values, account identifie
 Exposure is configured once per home and shared by every currently authorized member of that home. Authorization is still checked per principal on every request, but members do not maintain divergent exposure lists. Defaults should be conservative:
 
 - read-only environmental measurements may be suggested for exposure;
-- devices and scenes are opt-in;
-- sensitive device categories are never eligible;
+- devices are opt-in; scenes require individual approval or an explicitly confirmed home-level approval bypass;
+- sensitive device categories are ineligible for device-state reads; scene authorization follows the scene controls above;
 - the user can inspect and revoke exposure;
 - changes take effect without redeploying the agent.
 
@@ -350,7 +350,7 @@ For the initial Mijia-only release, `mijia-web-console` owns the complete entity
 - a home-level assistant enable switch;
 - room and environmental-measurement read toggles;
 - device-state read toggles;
-- scene execution toggles with risk, confirmation, and current revision badges;
+- a scene-action master toggle, individual scene approvals, and a confirmed bypass toggle with current revision badges;
 - source, last-sync, last-modified, and “changed since approval” indicators;
 - one action to revoke all assistant access.
 
@@ -376,8 +376,7 @@ All conditions must pass:
 
 - authenticated current home membership;
 - required action scope;
-- scene is exposed, enabled, approved, and revision-matched;
-- scene risk class is permitted;
+- scene is enabled, revision-matched, and exposed by either individual approval or confirmed home-level bypass;
 - request expresses explicit present-tense intent or uses a valid confirmation ticket;
 - alias was discovered through trusted context;
 - durable idempotency claim acquired atomically;
@@ -727,8 +726,8 @@ Subsequent work must preserve this sequence:
 1. **Home-read maturity:** add the versioned manifest and filtered read APIs below, plus
    explicit home-level exposure policy. Keep the automation-token envelope; do not revive
    session binding as a second canonical path.
-2. **Action prerequisites:** add reviewed scene aliases, exposure and scene revisions, risk
-   classification, explicit confirmation where required, and a console-owned durable Blob
+2. **Action prerequisites:** add scene aliases, exposure and scene revisions, explicit confirmation where required,
+   and a console-owned durable Blob
    action ledger. The ledger claim must use principal, home, idempotency key, canonical action
    hash, and revision; it must be atomically created before Xiaomi dispatch.
 3. **Action registration:** only after the prerequisites have deployed and concurrency-tested,
@@ -743,10 +742,10 @@ Subsequent work must preserve this sequence:
 | Current tool | Current behavior | Design decision |
 |---|---|---|
 | `authorize` | Validates the request context and returns `{ok: true}` | Retain as an internal health/auth operation, not a model-visible tool |
-| `list_scenes` | Returns enabled manual scenes as principal/home-scoped opaque aliases, names, generic descriptions, and action counts | Reuse aliasing; replace the coarse catalog with exposure, revision, risk, and searchable summaries |
+| `list_scenes` | Returns enabled manual scenes as principal/home-scoped opaque aliases, names, generic descriptions, and action counts | Reuse aliasing; replace the coarse catalog with exposure, revision, and searchable summaries |
 | `get_home_status` | Returns sanitized temperature, humidity, air-quality, pressure, and battery readings with completeness and warnings | Reuse collector; expose to the agent as filtered `get_home_environment` |
 | `get_device_status` | Returns bounded room/device projections with `on`, `off`, or `unknown` and online state | Reuse collector; add assistant exposure and validated room/kind/state filters |
-| `activate_scene` | Validates scope, alias, arguments, and idempotency, then always rejects execution; preview is read-only | Keep disabled until the durable ledger, revision binding, risk policy, and feature gate exist |
+| `activate_scene` | Validates scope, alias, arguments, and idempotency, then always rejects execution; preview is read-only | Keep disabled until the durable ledger, revision binding, authorization policy, and feature gate exist |
 
 The environment collector already has several desirable semantics: it reads public MIoT specifications, selects readable properties, normalizes units, batches property reads, filters offline sources, preserves partial failures, and omits raw Xiaomi identifiers. The device collector uses the same synchronized device-management model as the dashboard, preserves `unknown`, omits raw IDs/spec tuples, and bounds its result size. These should become implementations behind provider-neutral agent capabilities rather than be rewritten from scratch.
 
@@ -756,7 +755,7 @@ The environment collector already has several desirable semantics: it reads publ
 2. **No capability manifest.** The agent must already know a hard-coded list of console operations and schemas.
 3. **No filtered reads.** Both status tools require empty arguments, so a question about one room retrieves the whole bounded home projection.
 4. **Scene aliases are not revision-bound.** Editing a scene does not change its alias, so a previously reviewed action can silently acquire different semantics.
-5. **Scene summaries are too weak for safe selection.** The agent receives a generic description and action count, but no sanitized action summary, risk class, or revision.
+5. **Scene summaries are too weak for safe selection.** The agent receives a generic description and action count, but no sanitized action summary or revision.
 6. **No durable action ledger.** Request validation and an idempotency string do not provide an atomic, cross-process execution claim.
 7. **No physical execution path.** `runManualScene` exists in the console's Xiaomi layer, but the remote assistant route intentionally never calls it.
 8. **Fixed dispatch is not dynamic capability assembly.** It cannot express per-home/per-principal availability without adding policy outside the route.
@@ -782,7 +781,7 @@ Both endpoints resolve the canonical automation-token envelope into one internal
     {"name": "get_home_environment", "available": true, "risk": "home_read"},
     {"name": "get_device_status", "available": true, "risk": "home_read"},
     {"name": "find_scenes", "available": true, "risk": "home_read"},
-    {"name": "activate_scene", "available": false, "risk": "home_write_low"}
+    {"name": "activate_scene", "available": false, "risk": "home_write_scene"}
   ],
   "projection": {
     "rooms": ["客厅"],
@@ -803,7 +802,7 @@ The agent owns the model-facing JSON Schemas and never injects arbitrary remote 
 |---|---|---|
 | `get_home_environment` | optional exposed `rooms` and `metrics` | Sanitized readings, completeness, warnings, and `capturedAt` |
 | `get_device_status` | optional exposed `rooms`, closed-set `kinds`, and `states` | Sanitized bounded devices; `unknown` remains `unknown` |
-| `find_scenes` | bounded text `query` | Exposed opaque aliases, revision, sanitized action summary, and risk |
+| `find_scenes` | bounded text `query` | Exposed opaque aliases, revision, and sanitized action summary |
 | `get_scene_details` | `sceneAlias` | Current exposed revision and enough detail to clarify or confirm safely |
 | `activate_scene` | `sceneAlias`, `expectedRevision`, and policy-issued confirmation proof when required | Terminal action result after atomic claim; never retried blindly |
 
@@ -817,8 +816,8 @@ For a scene, store or derive:
 
 - an opaque alias scoped to principal and home;
 - an `exposureRevision` for the approval configuration;
-- a `sceneRevision` derived from normalized action semantics;
-- a sanitized summary and risk classification;
+- a `sceneRevision` derived from action semantics and target identifiers, excluding display name;
+- a sanitized action summary and per-home approval or confirmed approval bypass;
 - confirmation requirements and whether execution is enabled.
 
 The console owns the final authorization and durable action ledger because it is the only component allowed to execute against Xiaomi. The agent can collect intent and confirmation, but it cannot authorize itself. Immediately before execution, the console re-resolves the alias, checks exposure and both revisions, claims the idempotency key atomically, and invokes `runManualScene` once. Ambiguous transport outcomes become `outcome_unknown`, never an automatic retry.
@@ -961,7 +960,7 @@ Never use “HTTP 200” as evidence that a physical action succeeded.
 - Unexposed devices/scenes cannot be read or acted upon.
 - Real IDs and credentials never enter model requests, responses, logs, memory, or client payloads.
 - Action replay across conversations/workers/restarts executes once.
-- Changed scene revision invalidates approval.
+- Changed scene actions invalidate individual approval; renaming alone does not. Confirmed home-level bypass remains effective for the current revision.
 - Cancellation and timeout after dispatch remain unknown, not failed or retried.
 
 ### 20.3 Provider contracts
@@ -1027,11 +1026,22 @@ Run it against every model allowlist change.
 
 ### Phase 3 — Safe scene action
 
-- Extend scene discovery with exposure, normalized action summaries, risk, and revision hashes.
+- Extend scene discovery with exposure, normalized action summaries, and revision hashes.
 - Policy engine.
 - Console-owned EdgeOne Blob action ledger using the existing idempotency key, immutable records, `onlyIfNew`, and strong reads.
-- Revision-bound approval and explicit execution gate.
-- One low-risk real-scene end-to-end validation last.
+- Revision-bound individual approval, a confirmed per-home bypass switch, and an explicit execution gate.
+- One selected real-scene end-to-end validation last.
+
+Implementation progress (2026-09-25): per-home scene-action consent, normalized scene
+summaries, revision-bound individual approval, a confirmed home-level bypass for all
+current and future enabled manual scenes, and the console Blob claim/outcome ledger are
+implemented across the companion repositories. No static low-risk scene classification
+gates discovery or authorization. Approval revisions include private target/action
+material without exposing it in model projections; a display-name change alone does not
+invalidate approval. Physical writes remain unavailable through the
+deprecated command router and the automation-token tools route. Canonical action-scope
+registration and present-intent enforcement remain pending until the deployment gates
+in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset until then.
 
 Implementation progress (2026-09-24): per-home scene-action consent, normalized scene
 summaries, revision-bound approval, conservative light/switch risk filtering, Python
