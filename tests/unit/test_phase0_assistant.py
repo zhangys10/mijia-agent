@@ -14,11 +14,12 @@ from mijia_agent.app import create_app
 from mijia_agent.config import Settings
 from mijia_agent.gateway import Gateway
 from mijia_agent.llm_log import LlmCallLogger
-from mijia_agent.models import AgentError, HomeStatus
+from mijia_agent.models import AgentError, DeviceStatus, HomeCapabilities, HomeStatus
 from mijia_assistant.capabilities import (
     CaiyunWeatherCapability,
     CapabilityRegistry,
     CurrentDateTimeCapability,
+    DeviceStatusCapability,
     FakeWeatherCapability,
     HomeEnvironmentCapability,
 )
@@ -62,6 +63,35 @@ def context(**overrides):
 
 def run(engine, message="hello", ctx=None):
     return asyncio.run(engine.run(ctx or context(), message))
+
+
+def home_manifest(*, metrics=("temperature",), device_kinds=()):
+    return HomeCapabilities.model_validate(
+        {
+            "contextVersion": "1",
+            "exposureRevision": "exp_test",
+            "capabilities": [
+                *(
+                    [{"name": "get_home_environment", "available": True, "risk": "home_read"}]
+                    if metrics
+                    else []
+                ),
+                *(
+                    [{"name": "get_device_status", "available": True, "risk": "home_read"}]
+                    if device_kinds
+                    else []
+                ),
+            ],
+            "projection": {
+                "rooms": ["客厅"],
+                "measurementTypes": list(metrics),
+                "deviceKinds": list(device_kinds),
+                "roomMetrics": {"客厅": list(metrics)},
+                "roomDeviceKinds": {"客厅": list(device_kinds)},
+                "sceneSearchAvailable": False,
+            },
+        }
+    )
 
 
 def test_generic_answer_completes_without_invoking_home_or_weather():
@@ -395,7 +425,7 @@ def test_tool_result_error_returns_readable_answer_without_model_retry():
 def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
     class FailingHomeTools:
         async def capabilities_v1(self, user_token, request_id, home):
-            pytest.fail("the console validates the exposure during tool invocation")
+            return home_manifest()
 
         async def invoke_home_environment(self, user_token, request_id, home, arguments):
             assert (user_token, request_id, home, arguments) == (
@@ -411,7 +441,10 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
             )
 
     provider = ScriptedProvider(
-        ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})])
+        ModelTurn(
+            tool_calls=[ToolCall(id="discover", name="discover_home_exposure", arguments={})]
+        ),
+        ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})]),
     )
     capability = HomeEnvironmentCapability(FailingHomeTools())
     sink = StringIO()
@@ -427,8 +460,8 @@ def test_home_tool_error_returns_readable_answer_with_console_tool_signature():
 
     assert result.outcome == "tool_answer"
     assert result.answer.text == "查询暂时无法完成，请稍后再试。"
-    assert result.tool_events[0].status == "error"
-    assert json.loads(sink.getvalue())["errorCode"] == "CONSOLE_HTTP_502"
+    assert result.tool_events[-1].status == "error"
+    assert json.loads(sink.getvalue().splitlines()[-1])["errorCode"] == "CONSOLE_HTTP_502"
 
 
 def test_home_capability_forwards_bounded_filters_and_redacts_readings_from_model():
@@ -512,6 +545,9 @@ def test_home_model_projection_covers_each_metric_before_truncation():
     captured_at = "2026-09-23T00:00:00Z"
 
     class HomeTools:
+        async def capabilities_v1(self, user_token, request_id, home):
+            return home_manifest(metrics=("temperature", "formaldehyde"))
+
         async def invoke_home_environment(self, *args):
             return HomeStatus.model_validate(
                 {
@@ -543,6 +579,9 @@ def test_home_model_projection_covers_each_metric_before_truncation():
             )
 
     provider = ScriptedProvider(
+        ModelTurn(
+            tool_calls=[ToolCall(id="discover", name="discover_home_exposure", arguments={})]
+        ),
         ModelTurn(tool_calls=[ToolCall(id="home", name="get_home_environment", arguments={})]),
         ModelTurn(content="已读取。"),
     )
@@ -556,7 +595,11 @@ def test_home_model_projection_covers_each_metric_before_truncation():
     )
     assert result.data["groups"][1]["metric"] == "formaldehyde"
     tool_payload = json.loads(
-        next(message.content for message in provider.requests[1][0] if message.role == "tool")
+        next(
+            message.content
+            for message in provider.requests[2][0]
+            if message.role == "tool" and message.name == "get_home_environment"
+        )
     )
     assert len(tool_payload["readings"]) == 32
     assert tool_payload["truncated"] is True
@@ -564,6 +607,22 @@ def test_home_model_projection_covers_each_metric_before_truncation():
         "temperature",
         "formaldehyde",
     }
+    assert "看看甲醛" in next(
+        message.content for message in provider.requests[2][0] if message.role == "user"
+    )
+    assert [tool["function"]["name"] for tool in provider.requests[0][1]] == [
+        "discover_home_exposure"
+    ]
+    environment_schema = next(
+        tool["function"]["parameters"]
+        for tool in provider.requests[1][1]
+        if tool["function"]["name"] == "get_home_environment"
+    )
+    assert environment_schema["properties"]["rooms"]["items"]["enum"] == ["客厅"]
+    assert environment_schema["properties"]["metrics"]["items"]["enum"] == [
+        "temperature",
+        "formaldehyde",
+    ]
 
 
 def test_home_capability_rejects_invalid_metric_before_console_call():
@@ -579,12 +638,49 @@ def test_home_capability_rejects_invalid_metric_before_console_call():
         )
 
 
+def test_home_capability_rejects_metric_exposed_only_in_another_room():
+    class HomeTools:
+        async def invoke_home_environment(self, *args):
+            pytest.fail("room-metric mismatches must not reach the console")
+
+    manifest = HomeCapabilities.model_validate(
+        {
+            "contextVersion": "1",
+            "exposureRevision": "exp_room_metrics",
+            "capabilities": [
+                {"name": "get_home_environment", "available": True, "risk": "home_read"}
+            ],
+            "projection": {
+                "rooms": ["客厅", "卧室"],
+                "measurementTypes": ["temperature", "humidity"],
+                "deviceKinds": [],
+                "roomMetrics": {"客厅": ["temperature"], "卧室": ["humidity"]},
+                "roomDeviceKinds": {},
+                "sceneSearchAvailable": False,
+            },
+        }
+    )
+    with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
+        asyncio.run(
+            HomeEnvironmentCapability(HomeTools(), manifest).invoke(
+                context(automation_token=SecretStr("opaque-token")),
+                {"rooms": ["客厅"], "metrics": ["humidity"]},
+            )
+        )
+
+
 def test_home_tool_rejects_non_json_arguments_before_cache_or_console_call():
     class HomeTools:
+        async def capabilities_v1(self, user_token, request_id, home):
+            return home_manifest()
+
         async def invoke_home_environment(self, *args):
             pytest.fail("invalid arguments must not reach the console")
 
     provider = ScriptedProvider(
+        ModelTurn(
+            tool_calls=[ToolCall(id="discover", name="discover_home_exposure", arguments={})]
+        ),
         ModelTurn(
             tool_calls=[
                 ToolCall(
@@ -593,7 +689,7 @@ def test_home_tool_rejects_non_json_arguments_before_cache_or_console_call():
                     arguments={"metrics": [float("nan")]},
                 )
             ]
-        )
+        ),
     )
     with pytest.raises(AssistantError, match="INVALID_TOOL_ARGUMENTS"):
         run(
@@ -603,6 +699,65 @@ def test_home_tool_rejects_non_json_arguments_before_cache_or_console_call():
             "查看温度",
             context(automation_token=SecretStr("opaque-token")),
         )
+
+
+def test_device_status_request_uses_discovered_rooms_and_kinds_before_console_call():
+    calls = []
+
+    class HomeTools:
+        async def capabilities_v1(self, user_token, request_id, home):
+            calls.append("manifest")
+            return home_manifest(metrics=(), device_kinds=("light",))
+
+        async def invoke_device_status(self, user_token, request_id, home, arguments):
+            calls.append("invoke")
+            assert arguments == {"rooms": ["客厅"], "kinds": ["light"]}
+            return DeviceStatus.model_validate(
+                {
+                    "capturedAt": "2026-09-24T00:00:00Z",
+                    "completeness": "complete",
+                    "poweredOn": 1,
+                    "rooms": [
+                        {
+                            "room": "客厅",
+                            "items": [
+                                {"name": "客厅灯", "kind": "light", "state": "on", "online": True}
+                            ],
+                        }
+                    ],
+                    "warnings": [],
+                }
+            )
+
+    provider = ScriptedProvider(
+        ModelTurn(
+            tool_calls=[ToolCall(id="discover", name="discover_home_exposure", arguments={})]
+        ),
+        ModelTurn(
+            tool_calls=[
+                ToolCall(
+                    id="device",
+                    name="get_device_status",
+                    arguments={"rooms": ["客厅"], "kinds": ["light"]},
+                )
+            ]
+        ),
+        ModelTurn(content="客厅灯开着。"),
+    )
+    result = run(
+        ConversationEngine(provider, CapabilityRegistry([DeviceStatusCapability(HomeTools())])),
+        "客厅有哪些灯开着？",
+        context(automation_token=SecretStr("opaque-token")),
+    )
+    assert calls == ["manifest", "invoke"]
+    assert result.answer.text == "客厅灯开着。"
+    assert "客厅有哪些灯开着？" in next(
+        message.content for message in provider.requests[2][0] if message.role == "user"
+    )
+    assert any(
+        message.role == "tool" and message.name == "get_device_status"
+        for message in provider.requests[2][0]
+    )
 
 
 def test_unexpected_tool_exception_returns_readable_answer():
@@ -775,6 +930,31 @@ def test_history_allows_only_normalized_messages():
         )
     )
     assert result.answer.text == "follow-up"
+    messages = provider.requests[0][0]
+    assert "Handle only the latest user turn" in messages[0].content
+    assert [item.role for item in messages] == ["system", "user"]
+    assert '"content":"I answered the living-room query."' in messages[1].content
+    assert messages[1].content.endswith("and the bedroom?")
+
+
+def test_previous_home_question_is_reference_data_for_weather_turn():
+    provider = ScriptedProvider(ModelTurn(content="The weather is sunny."))
+    history = [
+        ModelMessage(role="user", content="Which lights are on?"),
+        ModelMessage(
+            role="assistant", content="Answered the user's previous request using a fresh lookup."
+        ),
+    ]
+    result = asyncio.run(
+        ConversationEngine(provider, CapabilityRegistry()).run(
+            context(), "What's the weather in Shanghai?", history
+        )
+    )
+    assert result.answer.text == "The weather is sunny."
+    messages = provider.requests[0][0]
+    assert [item.role for item in messages] == ["system", "user"]
+    assert '"content":"Which lights are on?"' in messages[1].content
+    assert messages[1].content.endswith("What's the weather in Shanghai?")
 
 
 def app_settings(**overrides):
@@ -995,6 +1175,8 @@ def test_internal_canonical_ingress_preserves_partial_home_data_and_model_answer
     assert body["toolEvents"] == [{"name": "get_home_environment", "status": "partial"}]
     assert body["homeStatus"]["groups"][0]["latest"]["value"] == 0.021
     assert body["data"]["type"] == "home_environment"
+    assert body["historyAnswer"] == "Answered the user's previous request using a fresh lookup."
+    assert "0.021" not in body["historyAnswer"]
 
 
 def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
@@ -1026,13 +1208,10 @@ def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
     assert second.status_code == 200
     assert second.json()["answer"]["text"] == "上海市目前没有配置可用的天气数据源。"
     messages = provider.requests[0][0]
-    assert [message.content for message in messages if message.role == "user"] == [
-        "今天天气怎么样？",
-        "locale=zh-CN; timezone=Asia/Shanghai; channel=web\n上海市",
-    ]
-    assert "你想查询哪个城市的天气？" in [
-        message.content for message in messages if message.role == "assistant"
-    ]
+    assert [message.role for message in messages] == ["system", "user"]
+    assert '"content":"今天天气怎么样？"' in messages[1].content
+    assert '"content":"你想查询哪个城市的天气？"' in messages[1].content
+    assert messages[1].content.endswith("locale=zh-CN; timezone=Asia/Shanghai; channel=web\n上海市")
 
 
 def test_stream_normalizer_orders_tool_deltas_and_has_one_terminal_event():
