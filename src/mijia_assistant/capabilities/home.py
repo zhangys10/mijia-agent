@@ -1,7 +1,7 @@
 from typing import ClassVar, Literal
 
 from mijia_agent.command_console import ConsoleAgentTools
-from mijia_agent.models import AgentError
+from mijia_agent.models import AgentError, HomeCapabilities
 from mijia_assistant.models import AssistantContext, AssistantError, CapabilityResult
 
 HOME_METRICS = (
@@ -21,8 +21,14 @@ class _HomeReadCapability:
     risk: Literal["home_read"] = "home_read"
     input_schema: ClassVar[dict]
 
-    def __init__(self, tools: ConsoleAgentTools):
+    def __init__(self, tools: ConsoleAgentTools, manifest: HomeCapabilities | None = None):
         self.tools = tools
+        self.manifest = manifest
+
+    def bind(self, manifest: HomeCapabilities):
+        if not any(item.name == self.name and item.available for item in manifest.capabilities):
+            return None
+        return type(self)(self.tools, manifest)
 
     async def is_available(self, ctx: AssistantContext) -> bool:
         return ctx.automation_token is not None and "ai:chat" in ctx.scopes
@@ -67,6 +73,27 @@ class _HomeReadCapability:
         return normalized
 
 
+class HomeExposureDiscoveryCapability(_HomeReadCapability):
+    name = "discover_home_exposure"
+    description = "Discover the home's approved read-only rooms, measurements, and device kinds before requesting home data."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        if args:
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            manifest = await self.tools.capabilities_v1(
+                self._token(ctx), ctx.request_id, ctx.home_selector
+            )
+        except AgentError as error:
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        return CapabilityResult(status="success", model_content=manifest.model_dump())
+
+
 class HomeEnvironmentCapability(_HomeReadCapability):
     name = "get_home_environment"
     description = "Read the exposed home's current environmental measurements."
@@ -90,8 +117,55 @@ class HomeEnvironmentCapability(_HomeReadCapability):
         },
     }
 
+    def __init__(self, tools: ConsoleAgentTools, manifest: HomeCapabilities | None = None):
+        super().__init__(tools, manifest)
+        if manifest is not None:
+            rooms = list(manifest.projection.roomMetrics)
+            metrics = manifest.projection.measurementTypes
+            room_metric_choices = "; ".join(
+                f"{room}: {', '.join(manifest.projection.roomMetrics[room])}" for room in rooms
+            )
+            self.description = (
+                "Read the exposed home's current environmental measurements. Only request "
+                f"room/metric pairs from the discovered exposure list: {room_metric_choices}."
+            )
+            self.input_schema = {
+                **self.input_schema,
+                "properties": {
+                    "rooms": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": rooms},
+                        "maxItems": 20,
+                    },
+                    "metrics": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": metrics},
+                        "maxItems": 9,
+                    },
+                },
+            }
+
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
         filters = self._validate_args(args, {"rooms", "metrics"})
+        if self.manifest is not None:
+            allowed_rooms = self.manifest.projection.roomMetrics
+            if any(room not in allowed_rooms for room in filters.get("rooms", [])) or any(
+                metric not in self.manifest.projection.measurementTypes
+                for metric in filters.get("metrics", [])
+            ):
+                raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+            selected_rooms = filters.get("rooms", list(allowed_rooms))
+            selected_metrics = filters.get("metrics")
+            if selected_metrics is not None and any(
+                metric
+                not in {
+                    exposed_metric
+                    for room in selected_rooms
+                    for exposed_metric in allowed_rooms[room]
+                }
+                for metric in selected_metrics
+            ):
+                raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
         try:
             status = await self.tools.invoke_home_environment(
                 self._token(ctx), ctx.request_id, ctx.home_selector, filters
@@ -168,8 +242,61 @@ class DeviceStatusCapability(_HomeReadCapability):
         },
     }
 
+    def __init__(self, tools: ConsoleAgentTools, manifest: HomeCapabilities | None = None):
+        super().__init__(tools, manifest)
+        if manifest is not None:
+            rooms = list(manifest.projection.roomDeviceKinds)
+            kinds = manifest.projection.deviceKinds
+            room_device_kind_choices = "; ".join(
+                f"{room}: {', '.join(manifest.projection.roomDeviceKinds[room])}" for room in rooms
+            )
+            self.description = (
+                "Read the exposed home's current device states. Only request "
+                f"room/device-kind pairs from the discovered exposure list: {room_device_kind_choices}."
+            )
+            self.input_schema = {
+                **self.input_schema,
+                "properties": {
+                    "rooms": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": rooms},
+                        "maxItems": 20,
+                    },
+                    "kinds": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": kinds},
+                        "maxItems": 40,
+                    },
+                    "states": self.input_schema["properties"]["states"],
+                },
+            }
+
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
         filters = self._validate_args(args, {"rooms", "kinds", "states"})
+        if self.manifest is not None and (
+            any(
+                room not in self.manifest.projection.roomDeviceKinds
+                for room in filters.get("rooms", [])
+            )
+            or any(
+                kind not in self.manifest.projection.deviceKinds
+                for kind in filters.get("kinds", [])
+            )
+        ):
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        if self.manifest is not None:
+            selected_rooms = filters.get("rooms", list(self.manifest.projection.roomDeviceKinds))
+            selected_kinds = filters.get("kinds")
+            if selected_kinds is not None and any(
+                kind
+                not in {
+                    exposed_kind
+                    for room in selected_rooms
+                    for exposed_kind in self.manifest.projection.roomDeviceKinds[room]
+                }
+                for kind in selected_kinds
+            ):
+                raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
         try:
             status = await self.tools.invoke_device_status(
                 self._token(ctx), ctx.request_id, ctx.home_selector, filters

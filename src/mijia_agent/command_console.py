@@ -12,7 +12,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentError, DeviceStatus, HomeStatus, Scene
+from .models import AgentError, DeviceStatus, HomeCapabilities, HomeStatus, Scene
 
 _ALLOWED_ERRORS = {
     "AI_UNAUTHENTICATED": 401,
@@ -42,6 +42,20 @@ _CONSOLE_DIAGNOSTICS = {
 class ConsoleAgentTools:
     def __init__(self, settings: Settings, client: httpx.AsyncClient):
         self.settings, self.client = settings, client
+
+    async def capabilities_v1(
+        self, user_token: str, request_id: str, home: str | None
+    ) -> HomeCapabilities:
+        body: dict = {"requestId": request_id}
+        if home is not None:
+            body["home"] = home
+        result = await self._call_v1("capabilities", user_token, body)
+        try:
+            return HomeCapabilities.model_validate(result)
+        except (TypeError, ValueError, ValidationError):
+            raise AgentError(
+                "AI_AGENT_UNAVAILABLE", diagnostic_code="CONSOLE_CAPABILITIES_SCHEMA_INVALID"
+            ) from None
 
     async def invoke_home_environment(
         self, user_token: str, request_id: str, home: str | None, arguments: dict
@@ -86,6 +100,7 @@ class ConsoleAgentTools:
                 headers={
                     "Authorization": "Bearer " + self.settings.tools_secret,
                     "X-Ai-User-Token": user_token,
+                    "X-Request-Id": body["requestId"],
                 },
                 json=body,
                 timeout=15,
