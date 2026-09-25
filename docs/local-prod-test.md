@@ -11,20 +11,25 @@ The workflow does not add an execution bypass. Action-like model output is rejec
 
 ## Prerequisites
 
-- Python 3.11+ and the repo installed for development (`pip install --no-deps -e .`).
-- Production variables pulled with `edgeone makers env pull` (or `edgeone makers dev`) into
-  the ignored `adapters/edgeone/.env`.
+- Python 3.11+, Node.js/npm, and the EdgeOne CLI logged into the account that owns `mijia-agent`.
+- The first acknowledged `run --profile live-read` bootstraps the Python environment, builds
+  the adapter, links the `mijia-agent` Makers project, and pulls its production environment
+  into the ignored `adapters/edgeone/.env`. It reuses those setup results on later runs.
 - A sealed `xiaomi_session` cookie copied from the logged-in production console
   (DevTools → Application → Cookies). The CLI turns it into an automation token by
   delegating to the console repo's offline generator — the Python process never
   implements Xiaomi session decryption.
+
+The first-run setup replaces an existing `adapters/edgeone/.env` with the production
+environment pulled from EdgeOne. `check` and `smoke --profile fake` do not run setup or
+contact EdgeOne.
 
 The pulled env must include the production Gateway fields, `AI_PYTHON_INTERNAL_SECRET`,
 `AI_TOOLS_INTERNAL_SECRET`, and an HTTPS production `MIJIA_CONSOLE_BASE_URL`. It may carry
 an `AI_GATEWAY_ALLOWED_MODELS` value that includes the configured model. The CLI validates
 that allowlist without weakening or modifying the deployment policy.
 
-## 1. Check the target without making network calls
+## 1. Check an already prepared target without making network calls
 
 ```bash
 mijia-agent-local-prod check
@@ -33,6 +38,9 @@ mijia-agent-local-prod check
 `check` parses the env file without shell evaluation, validates it with the same `Settings`
 used by the app, and displays only the environment, hostnames, model, and loopback address.
 It performs no Gateway, console, or agent request.
+On a fresh checkout, the first acknowledged `run --profile live-read` performs setup and
+configuration validation before it asks for a token or sends a model request. Run `check`
+after that setup to repeat the local validation without network calls.
 
 A common stale pull contains:
 
@@ -57,20 +65,19 @@ deadline handling, and physical-write rejection.
 ## 3. Run a local live-read session
 
 ```bash
-mijia-agent-local-prod run --profile live-read
+mijia-agent-local-prod run --profile live-read --console-repo /path/to/mijia-web-console
 ```
 
-The CLI will:
+The CLI will, after the production acknowledgement:
 
-1. print the redacted production target;
-2. warn about real data, cost, and possible effects;
-3. require the exact acknowledgement `USE PRODUCTION SERVICES`;
-4. generate the automation token from your pasted `xiaomi_session` cookie by default —
-   press Enter, paste the cookie at the hidden prompt, and the CLI delegates to the
-   console repo's offline generator (type `token` instead to paste a ready-made token);
-5. start the real Uvicorn app on `127.0.0.1:8000`;
-6. send each prompt through the canonical `POST /ai/assistant` HTTP boundary; and
-7. stop the child process and delete its private LLM log on exit.
+1. run the first-use local setup when its Python or EdgeOne state is missing;
+2. print the redacted production target;
+3. generate the automation token from your pasted `xiaomi_session` cookie by default —
+   paste the cookie at the hidden prompt, and the CLI delegates to the
+   console repo's offline generator (use `--token-file` for a ready-made token);
+4. start the real Uvicorn app on `127.0.0.1:8000`;
+5. send each prompt through the canonical `POST /ai/assistant` HTTP boundary; and
+6. stop the child process and delete its private LLM log on exit.
 
 Use `/exit`, `/quit`, Ctrl-D, or Ctrl-C to stop. Every prompt gets a new random visible
 `Request-Key`. The CLI never automatically retries a timeout or disconnect. Physical writes are
@@ -82,13 +89,33 @@ For one prompt and exit:
 mijia-agent-local-prod run --profile live-read --message '客厅温度是多少？'
 ```
 
+To make the live-read check assert that the exposure-filtered home tool actually ran,
+require a successful event for that capability:
+
+```bash
+mijia-agent-local-prod run --profile live-read --message '客厅温度是多少？' --expect-tool get_home_environment
+mijia-agent-local-prod run --profile live-read --message '客厅灯开着吗？' --expect-tool get_device_status
+```
+
+The command exits with an error if the requested tool is absent or did not complete as
+`success` or `partial`; it never retries. To exercise the short Siri rendering contract,
+select `--channel siri` (or `voice`); the CLI requires and displays a `speechText` of at
+most 280 characters:
+
+```bash
+mijia-agent-local-prod run --profile live-read --channel siri --message '客厅温度是多少？' --expect-tool get_home_environment
+```
+
+These commands use the real configured model and production home data, so each incurs the
+same cost and privacy impact as any other live-read run.
+
 ## Secure token files
 
 `run` generates a fresh token in memory by default (paste the cookie at the hidden
 prompt); it is never printed or written to disk. To pre-generate one for repeated use:
 
 ```bash
-mijia-agent-local-prod generate-token --cookie-file /path/to/cookie --token-out /path/to/automation-token
+mijia-agent-local-prod generate-token --console-repo /path/to/mijia-web-console --cookie-file /path/to/cookie --token-out /path/to/automation-token
 ```
 
 Both files must be owner-only (`chmod 600`); the CLI refuses group/world-readable inputs
@@ -100,11 +127,12 @@ token to the production console only after selecting a home-read capability, mat
 web adapter's production tool envelope. Proxy environment variables are disabled for both loopback and
 production requests so credentials cannot be captured by an inherited HTTP(S) proxy.
 
-Token generation requires the console checkout (default `../mijia-web-console`, override
-with `--console-repo`) because sealing uses the console's own libraries and the
-`AI_AUTOMATION_TOKEN_SECRET` / `XIAOMI_SESSION_SECRET` values from the pulled env file.
-Generated tokens bind to `NODE_ENV=production`, matching the deployed console; a token from
-a differently configured console is rejected at verification time.
+Token generation requires the console checkout selected with `--console-repo` because
+sealing uses the console's own libraries. The pulled agent env file supplies
+`AI_AUTOMATION_TOKEN_SECRET`; the console checkout's `.env` supplies
+`XIAOMI_SESSION_SECRET` when it is absent from the pulled file. Both secrets must match
+the deployed console. Generated tokens bind to `APP_ENV=production`, matching production;
+the checkout's local `.env` cannot override the selected token secret.
 
 Automation can skip the typed phrase with the intentionally explicit
 `--i-understand-this-uses-production` flag. This acknowledges production use; it does not

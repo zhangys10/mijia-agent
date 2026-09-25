@@ -354,6 +354,14 @@ For the initial Mijia-only release, `mijia-web-console` owns the complete entity
 - source, last-sync, last-modified, and “changed since approval” indicators;
 - one action to revoke all assistant access.
 
+The settings inventory must be grounded in the console's current read results: offer a
+room/measurement pair only when the environment collector has returned a valid reading
+for that pair, and offer a device only when it appears in the shared device-status
+projection. Do not construct a room × metric grid from the static metric vocabulary or
+offer every discovered device as a status source. A temporarily missing reading is
+unavailable for new approval; existing grants remain stored until the user saves a
+revised configuration. The tool boundary still rechecks exposure on every invocation.
+
 Store exposure against provider-neutral keys such as `provider + providerEntityRef`. Initially `provider=mijia`; a future Home Assistant provider can appear as another source without changing the agent contract or the per-home sharing rule.
 
 ### 9.3 Lazy discovery
@@ -780,12 +788,14 @@ Both endpoints resolve the canonical automation-token envelope into one internal
     "rooms": ["客厅"],
     "measurementTypes": ["temperature", "humidity"],
     "deviceKinds": ["light"],
+    "roomMetrics": {"客厅": ["temperature", "humidity"]},
+    "roomDeviceKinds": {"客厅": ["light"]},
     "sceneSearchAvailable": true
   }
 }
 ```
 
-The agent owns the model-facing JSON Schemas and never injects arbitrary remote descriptions or schemas into the model prompt. The manifest is available when a client needs discovery. A selected read tool makes one `tools:invoke` request; the console checks current availability, authorization, and exposure in that request. The console reuses one device discovery for inventory validation and the selected collector. For environment reads, it collects all exposed metrics once and applies requested room/metric filters to the sanitized snapshot locally. The agent validates bounded argument shapes before sending them, while the console checks every filter against the current exposure projection.
+The agent owns the model-facing JSON Schemas and never injects arbitrary remote descriptions or schemas into the model prompt. For a home question, the model first selects a local discovery tool. The agent fetches the exposure manifest, then generates home-read tool schemas constrained to those approved rooms, measurements, and device kinds. A selected read tool makes one `tools:invoke` request; the console independently rechecks current availability, authorization, and exposure. It reuses one device discovery for inventory validation and the selected collector. For environment reads, it intersects requested filters with current exposure before collecting and batches MIoT reads for those pairs. The agent validates arguments against the manifest before sending them. The console returns sanitized results, and the agent sends those results together with the original question to the model for its final answer. Generic questions do not fetch a home manifest.
 
 `tools:invoke` uses a strict union keyed by a known operation:
 

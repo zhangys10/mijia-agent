@@ -1,5 +1,7 @@
+import json
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -160,6 +162,54 @@ def test_confirmation_rejects_non_ascii_without_traceback():
         local_prod.confirm_production(False, input_fn=lambda _prompt: "使用生产服务")
 
 
+def test_prepare_local_prod_runs_setup_and_reexecs_in_repository_venv(monkeypatch):
+    repo_root = Path(local_prod.__file__).resolve().parents[2]
+    setup_script = repo_root / "scripts" / "local-prod-setup.sh"
+    interpreter = repo_root / ".venv" / "bin" / "python"
+    setup_calls = []
+    exec_calls = []
+    original_is_file = Path.is_file
+
+    def is_file(path):
+        if path == interpreter:
+            return True
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr(local_prod.sys, "prefix", "/outside-repo-venv")
+    monkeypatch.setattr(
+        local_prod.subprocess,
+        "run",
+        lambda command, cwd, check: (
+            setup_calls.append((command, cwd, check)) or SimpleNamespace(returncode=0)
+        ),
+    )
+    monkeypatch.setattr(local_prod.os, "execv", lambda *args: exec_calls.append(args))
+
+    env_file = repo_root / "custom-prod.env"
+    local_prod.prepare_local_prod(
+        ["run", "--message", "hello", "--env-file", "relative.env"], env_file
+    )
+
+    assert setup_calls == [(["bash", str(setup_script)], repo_root, False)]
+    assert exec_calls == [
+        (
+            str(interpreter),
+            [
+                str(interpreter),
+                "-m",
+                "mijia_agent.local_prod",
+                "run",
+                "--message",
+                "hello",
+                "--env-file",
+                str(env_file),
+                "--i-understand-this-uses-production",
+            ],
+        )
+    ]
+
+
 def test_build_environment_preserves_default_model_allowlist(tmp_path):
     path = tmp_path / ".env"
     values = {key: value for key, value in PROD_ENV.items() if key != "AI_GATEWAY_ALLOWED_MODELS"}
@@ -232,6 +282,7 @@ def test_generate_token_delegates_via_private_file(tmp_path):
         30,
         None,
         None,
+        tmp_path / "production.env",
         popen=fake_popen,
     )
 
@@ -240,10 +291,12 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     session_file = Path(command[command.index("--session-file") + 1])
     assert not session_file.exists()  # cookie temp file removed
     assert "pasted-cookie-value" not in " ".join(command)
-    # The console script auto-reads its own .env for the secrets; the agent's
-    # child env must carry nothing sensitive, only the env binding + basics.
+    assert command[command.index("--env-file") + 1] == str((tmp_path / "production.env").resolve())
+    # Node reads the selected token env file and the console's session env;
+    # Python passes only the path and production token binding.
     child_env = captured["env"]
-    assert set(child_env) <= {"PATH", "HOME", "NODE_ENV"}
+    assert set(child_env) <= {"PATH", "HOME", "APP_ENV", "NODE_ENV"}
+    assert child_env["APP_ENV"] == "production"
     assert child_env["NODE_ENV"] == "production"
     assert "AI_AUTOMATION_TOKEN_SECRET" not in child_env
     assert "XIAOMI_SESSION_SECRET" not in child_env
@@ -255,7 +308,43 @@ def test_generate_token_rejects_bad_days(tmp_path):
     script_path.write_text("// stub\n", encoding="utf-8")
 
     with pytest.raises(local_prod.CliError, match="between 1 and 90"):
-        local_prod.generate_token(tmp_path, "cookie", 91, None, None, popen=lambda *_a, **_k: None)
+        local_prod.generate_token(
+            tmp_path,
+            "cookie",
+            91,
+            None,
+            None,
+            tmp_path / "production.env",
+            popen=lambda *_a, **_k: None,
+        )
+
+
+def test_generate_token_reports_cookie_secret_mismatch_without_node_footer(tmp_path):
+    script_path = tmp_path / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("// stub\n", encoding="utf-8")
+
+    def fake_popen(_command, **_kwargs):
+        class Proc:
+            returncode = 1
+
+            def communicate(self):
+                return "", "XIAOMI_SESSION_INVALID: cookie mismatch\nNode.js v24.10.0\n"
+
+        return Proc()
+
+    with pytest.raises(local_prod.CliError, match="XIAOMI_SESSION_INVALID") as caught:
+        local_prod.generate_token(
+            tmp_path,
+            "fake-cookie",
+            30,
+            None,
+            None,
+            tmp_path / "production.env",
+            popen=fake_popen,
+        )
+
+    assert "Node.js" not in str(caught.value)
 
 
 def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
@@ -278,6 +367,7 @@ def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
         30,
         None,
         tmp_path / "token.txt",
+        tmp_path / "production.env",
         popen=fake_popen,
     )
 
@@ -327,6 +417,22 @@ def test_main_generate_token_writes_owner_only_file(tmp_path, monkeypatch, capsy
     assert result == 0
     assert "v1.generated-token" not in capsys.readouterr().out
     assert stat.S_IMODE((tmp_path / "token.txt").stat().st_mode) == 0o600
+
+
+def test_generate_token_requires_explicit_console_repo(tmp_path, monkeypatch, capsys):
+    env_path = tmp_path / ".env"
+    write_env(env_path)
+    cookie_path = tmp_path / "cookie.txt"
+    cookie_path.write_text("pasted-cookie\n", encoding="utf-8")
+    cookie_path.chmod(0o600)
+    monkeypatch.chdir(tmp_path)
+
+    result = local_prod.main(
+        ["generate-token", "--env-file", str(env_path), "--cookie-file", str(cookie_path)]
+    )
+
+    assert result == 2
+    assert "pass --console-repo PATH" in capsys.readouterr().err
 
 
 def test_private_log_path_has_owner_only_permissions():
@@ -583,8 +689,44 @@ def test_run_requires_acknowledgement_before_token_or_process(tmp_path, monkeypa
     monkeypatch.setattr("builtins.input", lambda _prompt: "no")
     monkeypatch.setattr(local_prod, "load_token", lambda *_args: pytest.fail("read token"))
     monkeypatch.setattr(local_prod, "start_agent", lambda *_args: pytest.fail("started process"))
+    monkeypatch.setattr(local_prod, "prepare_local_prod", lambda *_args: pytest.fail("ran setup"))
 
     assert local_prod.main(["run", "--env-file", str(path)]) == 2
+
+
+def test_run_prompts_for_cookie_without_echo(tmp_path, monkeypatch, capsys):
+    env_path = tmp_path / ".env"
+    write_env(env_path)
+    captured = {}
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("visible cookie prompt"))
+    monkeypatch.setattr(local_prod.getpass, "getpass", lambda _prompt: "fake-cookie")
+    monkeypatch.setattr(local_prod, "prepare_local_prod", lambda _args, _env_file: None)
+
+    def fake_generate(_repo, cookie, _days, _home, _out, _env_file):
+        captured["cookie"] = cookie
+        return "v1.fake-token"
+
+    monkeypatch.setattr(local_prod, "generate_token", fake_generate)
+    monkeypatch.setattr(
+        local_prod,
+        "ensure_port_available",
+        lambda *_args: (_ for _ in ()).throw(local_prod.CliError("stop before network")),
+    )
+
+    result = local_prod.main(
+        [
+            "run",
+            "--env-file",
+            str(env_path),
+            "--console-repo",
+            str(tmp_path),
+            "--i-understand-this-uses-production",
+        ]
+    )
+
+    assert result == 2
+    assert captured["cookie"] == "fake-cookie"
+    assert "fake-cookie" not in str(capsys.readouterr())
 
 
 def test_run_cleans_private_log_when_child_start_fails(tmp_path, monkeypatch):
@@ -599,6 +741,7 @@ def test_run_cleans_private_log_when_child_start_fails(tmp_path, monkeypatch):
     log_path.touch(mode=0o600)
 
     monkeypatch.setattr(local_prod, "private_log_path", lambda: (log_dir, log_path))
+    monkeypatch.setattr(local_prod, "prepare_local_prod", lambda _args, _env_file: None)
     monkeypatch.setattr(local_prod, "ensure_port_available", lambda *_args: None)
     monkeypatch.setattr(
         local_prod, "start_agent", lambda *_args: (_ for _ in ()).throw(local_prod.CliError("no"))
@@ -659,7 +802,8 @@ def test_start_agent_argv_and_env_never_include_automation_token(monkeypatch):
     assert "v1.sentinel-token" not in serialized
     assert "automation-token" not in serialized
     assert "--port" in captured["command"]
-    assert "-P" in captured["command"]
+    assert "-P" not in captured["command"]
+    assert captured["cwd"] == str(Path(local_prod.__file__).resolve().parents[1])
     assert captured["stdin"] is local_prod.subprocess.DEVNULL
     assert captured["env"]["PYTHONPATH"].split(local_prod.os.pathsep)[0] == str(
         Path(local_prod.__file__).resolve().parents[1]
@@ -717,3 +861,59 @@ def test_print_assistant_response_renders_bounded_environment_data(capsys):
     output = capsys.readouterr().out
     assert "answer: 已读取当前家庭环境状态。" in output
     assert "data: 甲醛 0.048mg/m³（客厅）" in output
+
+
+def test_send_assistant_forwards_channel_and_expectations_check_read_tool(capsys):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "outcome": "tool_answer",
+                "answer": {"text": "已读取。", "speechText": "客厅温度正常。"},
+                "toolEvents": [{"name": "get_home_environment", "status": "success"}],
+                "usage": {"totalTokens": 12, "estimated": False},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        body, _key = local_prod.send_assistant(
+            client, "http://local", "opaque-token", "客厅温度是多少？", None, None, "siri"
+        )
+
+    assert requests[0].url.path == "/ai/assistant"
+    assert json.loads(requests[0].content)["channel"] == "siri"
+    local_prod.print_assistant_response(body, "siri", "get_home_environment")
+    output = capsys.readouterr().out
+    assert "speechText: 客厅温度正常。" in output
+    assert "tool: get_home_environment (success)" in output
+
+
+def test_assistant_live_read_expectations_fail_closed(capsys):
+    body = {
+        "answer": {"text": "暂时无法读取。", "speechText": "暂时无法读取。"},
+        "toolEvents": [{"name": "get_home_environment", "status": "error"}],
+    }
+    with pytest.raises(local_prod.CliError, match="Expected successful home read tool"):
+        local_prod.print_assistant_response(body, "siri", "get_home_environment")
+
+    with pytest.raises(local_prod.CliError, match="bounded speechText"):
+        local_prod.print_assistant_response(
+            {"answer": {"text": "ok", "speechText": "x" * 281}}, "siri"
+        )
+
+    assert capsys.readouterr().out == ""
+
+
+def test_expect_tool_requires_a_single_live_read_message(tmp_path, capsys):
+    env_path = tmp_path / ".env"
+    write_env(env_path)
+
+    result = local_prod.main(
+        ["run", "--env-file", str(env_path), "--expect-tool", "get_home_environment"]
+    )
+
+    assert result == 2
+    assert "--expect-tool requires run --message" in capsys.readouterr().err

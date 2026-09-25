@@ -88,6 +88,15 @@ adapter's `AI_PYTHON_BASE_URL` to `https://<makers-host>/api`.
 Python source changes. The included Dockerfile remains a local standalone/fallback
 host; it is not the EdgeOne deployment path.
 
+The companion console's Phase 2 exposure record uses the EdgeOne Makers Blob namespace
+`mijia-ai-assistant-exposure-v1`. Its first authenticated settings request creates the
+namespace. Home-exposure reads use Blob strong consistency; EdgeOne KV is not used for
+authorization or exposure state. Keep scene execution disabled.
+Each accepted exposure update also appends an immutable Blob audit record with the
+server-derived actor principal, prior and new revisions, room-metric grants, and
+selected-device count. Audit records contain no raw device IDs and are never returned
+to the model or browser.
+
 Use `npm run build` as EdgeOne's custom build command. EdgeOne detects
 `adapters/edgeone/package.json` and executes the command from that directory; adding
 `--prefix adapters/edgeone` there doubles the path. The generated Python builder output

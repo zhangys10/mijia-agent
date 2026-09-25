@@ -19,6 +19,7 @@ from mijia_assistant.capabilities import (
     HomeEnvironmentCapability,
 )
 from mijia_assistant.conversation import ConversationEngine, ConversationRepository
+from mijia_assistant.conversation.history import model_history_answer
 from mijia_assistant.models import AssistantContext, AssistantError, ModelMessage
 from mijia_assistant.providers import OpenAICompatibleProvider
 
@@ -54,6 +55,11 @@ COMMAND_ERROR_MAP = {
     "IDEMPOTENCY_CONFLICT": ("IDEMPOTENCY_CONFLICT", 409, "请求重复且内容不一致"),
     "INVALID_REQUEST": ("INVALID_REQUEST", 400, "请求格式不正确"),
     "AI_SCENE_EXECUTION_DISABLED": ("AI_SCENE_EXECUTION_DISABLED", 403, "场景执行尚未开放"),
+    "AI_CAPABILITY_UNAVAILABLE": (
+        "AI_CAPABILITY_UNAVAILABLE",
+        403,
+        "该家庭尚未向 AI 助手开放这类只读信息",
+    ),
     "AI_SCENE_NOT_FOUND": ("AI_SCENE_NOT_FOUND", 400, "未找到匹配的场景"),
     "AI_PREVIEW_READ_ONLY": ("AI_PREVIEW_READ_ONLY", 403, "预览环境只读"),
     "AI_AGENT_UNAVAILABLE": ("MI_CLOUD_ERROR", 502, "米家服务暂时不可用"),
@@ -288,7 +294,10 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             history = await app.state.conversation_repository.get(context)
             result = await app.state.assistant_engine.run(context, body.text, history)
             await app.state.conversation_repository.append(context, body.text, result)
-            return JSONResponse(public_response(result), headers=headers)
+            response_body = public_response(result)
+            if body.channel in {"siri", "voice"}:
+                response_body["answer"]["speechText"] = result.answer.text[:280]
+            return JSONResponse(response_body, headers=headers)
         except (ValueError, ValidationError):
             return JSONResponse(
                 {"code": "INVALID_REQUEST", "requestId": request_id}, 400, headers=headers
@@ -328,6 +337,7 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             context = AssistantContext(
                 request_id=turn.requestId,
                 conversation_id=turn.conversationId,
+                channel=turn.channel,
                 locale=turn.locale,
                 timezone=turn.timezone,
                 scopes=frozenset(turn.scopes),
@@ -339,8 +349,14 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             )
             history = [ModelMessage(role=item.role, content=item.content) for item in turn.history]
             result = await app.state.assistant_engine.run(context, turn.message, history)
-            await app.state.conversation_repository.append(context, turn.message, result)
-            event = next((item for item in result.tool_events if item.status == "success"), None)
+            event = next(
+                (
+                    item
+                    for item in reversed(result.tool_events)
+                    if item.status in {"success", "partial"}
+                ),
+                None,
+            )
             intent = (
                 {
                     "get_home_environment": "get_home_status",
@@ -352,8 +368,22 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             body = {
                 "requestId": result.request_id,
                 "conversationId": result.conversation_id,
+                "status": result.status,
+                "outcome": result.outcome,
+                "answer": {
+                    "text": result.answer.text,
+                    "speak": result.answer.speak,
+                    "continueConversation": result.answer.continue_conversation,
+                },
                 "message": result.answer.text,
+                "historyAnswer": model_history_answer(result),
+                "speak": result.answer.text[:280]
+                if turn.channel in {"siri", "voice"}
+                else result.answer.text,
                 "intent": intent,
+                "toolEvents": [
+                    {"name": item.name, "status": item.status} for item in result.tool_events
+                ],
                 "usage": {
                     "promptTokens": result.usage.prompt_tokens,
                     "completionTokens": result.usage.completion_tokens,
@@ -361,6 +391,21 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                     "estimated": result.usage.estimated,
                 },
             }
+            if result.data is not None:
+                body["data"] = result.data
+                if result.data.get("type") == "home_environment":
+                    body["homeStatus"] = {
+                        key: value for key, value in result.data.items() if key != "type"
+                    }
+                elif result.data.get("type") == "device_status":
+                    body["deviceStatus"] = {
+                        key: value for key, value in result.data.items() if key != "type"
+                    }
+            if event is not None and intent in {"get_home_status", "get_device_status"}:
+                body["tool"] = {
+                    "name": intent,
+                    "status": "partial_success" if event.status == "partial" else "success",
+                }
             return JSONResponse(body, headers=headers)
         except (ValueError, ValidationError):
             return JSONResponse(

@@ -22,3 +22,4 @@ Historical documents in docs/source-snapshot are evidence, not the current imple
 - Do not mark mocked integration tests as live EdgeOne, Gateway, KV, or Xiaomi validation.
 
 Do not create commits, push, or deploy unless the user's request authorizes that action.
+- Whenever preparing a pull request, fetch the latest `origin/main` and merge it into the PR branch first. Resolve any conflicts and rerun the relevant quality gates before opening the PR; if the fetch or merge cannot be completed, do not open the PR and report the blocker.

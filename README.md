@@ -56,13 +56,17 @@ legacy-only and must not receive new assistant behavior.
 > account/home data and incur real Gateway cost. They preserve the production execution
 > policy; they do not enable or bypass physical scene execution.
 
-After pulling the production environment into the ignored `adapters/edgeone/.env`, verify
-that it targets the HTTPS production console and inspect the redacted target:
+The fake smoke check is local-only:
 
 ```bash
-mijia-agent-local-prod check
 mijia-agent-local-prod smoke --profile fake
 ```
+
+The first acknowledged `mijia-agent-local-prod run --profile live-read` runs
+[`scripts/local-prod-setup.sh`](scripts/local-prod-setup.sh) when setup is missing. It prepares
+`.venv`, builds the adapter, links the `mijia-agent` Makers project, and pulls the production
+environment into the ignored `adapters/edgeone/.env`. After setup, `check` validates the config
+and prints a redacted target. `check` and fake smoke do not run setup.
 
 Then run an interactive session — the CLI generates the automation token from your pasted
 `xiaomi_session` cookie (hidden prompt) via the console repo's offline generator, or type
@@ -81,6 +85,10 @@ rollback access requires `AI_LEGACY_ROUTER_ENABLED=true` and emits deprecation t
 The CLI starts the real ASGI app on loopback and shuts it down on exit. See
 [the live test guide](docs/local-prod-test.md) for cookie/token files, retained logs,
 expected execution-gate behavior, and operational warnings.
+
+For a local Console → Agent → Python → Console round trip with a deterministic fake Gateway
+and no real model calls, see the companion Console repository's
+[local integration guide](../mijia-web-console/docs/local-integration-test.md).
 
 ## EdgeOne adapter
 

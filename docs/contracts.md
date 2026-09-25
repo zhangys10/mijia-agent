@@ -48,6 +48,12 @@ Responses preserve `requestId`, `conversationId`, `message`, `intent`, optional
 `estimated` flag. Public projection happens in the console. Scene status is derived
 from the executor. Error responses contain a stable `code` and, when already known,
 model `usage`; do not drop known usage when implementing failure settlement.
+Successful canonical assistant responses also include `historyAnswer`: a bounded,
+redacted assistant message produced by the Python conversation layer. The Makers
+adapter stores the original user turn and this projection as model history. It must
+not substitute the display `message` or infer redaction from a tool name.
+For each model call, Python presents that history as bounded reference data within
+the current user turn; only the latest user text is an active request for tools.
 
 ## Agent services → console tools
 
@@ -112,8 +118,9 @@ sanitized object (never DIDs, raw property addresses, or Xiaomi records):
 
 Python validates this shape strictly (`extra="forbid"`, bounded lists and strings) and
 forwards it as `Result.homeStatus`. Readings are fetched only after the model selects
-the tool; they never enter model messages, replies, or conversation history. The reply
-text is a generic statement; the browser assistant renders the structured readings.
+the tool. The model then receives a bounded projection of the exposure-filtered readings
+alongside the original question and generates the final answer. The same typed snapshot
+is returned as structured client data for the browser.
 
 `get_device_status` answers "which lights/devices are on, by room" with the same
 sanitization contract (never DIDs, model strings, raw property addresses, or Xiaomi
@@ -139,9 +146,10 @@ as its home dashboard:
 
 Devices without a readable power property (locks, sensors) report `state: "unknown"`
 — never a guessed value. Python validates the shape strictly and forwards it as
-`Result.deviceStatus`; states are fetched only after the model selects the tool and
-never enter model messages, replies, or conversation history. The reply text is a
-generic statement; the browser assistant renders the per-room device card.
+`Result.deviceStatus`; states are fetched only after the model selects the tool. The
+model receives a bounded, sanitized projection of the exposed per-room device states
+with the original question and generates the final answer. The same typed snapshot is
+returned as structured client data for the browser.
 
 The future executor must refresh the scene, validate alias/home/approval revision/risk,
 claim a durable execution receipt, and return only `status` and `message`. It must not
@@ -150,6 +158,44 @@ an idempotency key alone do not establish that an action is safe.
 
 The existing `/api/xiaomi/control` and `/api/xiaomi/scenes/run` are **not** generic
 LLM tools. They use different browser/session assumptions and expose raw device IDs.
+
+### Phase 2 versioned home observation API
+
+The canonical assistant uses the versioned automation-token endpoints for home reads:
+
+- `POST /api/internal/assistant/v1/capabilities`
+- `POST /api/internal/assistant/v1/tools:invoke`
+
+Both require the console service Bearer plus `X-Ai-User-Token`. The console opens the
+audience-bound `mijia-agent` token, re-derives principal/home context, and reads the
+home-wide exposure record. For a home question, the model first selects the local
+`discover_home_exposure` tool. Python fetches the manifest, then offers only home-read
+tools constrained by that manifest. A selected read uses one `tools:invoke` request.
+Python bounds arguments with its own versioned tool schema; the console rechecks current
+membership and exposure and validates every requested filter before collecting data.
+Python never accepts remote model schemas or descriptions.
+
+The manifest reports `contextVersion: "1"`, an opaque `exposureRevision`, exposed room
+names, exposed measurement types, exposed device kinds, per-room measurement and device-kind
+lists, and read capability availability.
+Missing exposure records mean disabled with no rooms, metrics, devices, or capabilities.
+After the discovery call, the agent invokes the console for a home read only when the model
+selects a listed capability. Tool filters can
+reduce disclosure, and every requested room, metric, kind, and state must remain within
+the current exposure projection. The console fetches the current device inventory once
+per invocation and reuses it for the selected collector. For `get_home_environment`, the
+console intersects requested filters with current exposure before collecting. The
+collector batches MIoT property reads for those selected room/metric pairs, then the
+console filters the sanitized snapshot again before returning it.
+
+`get_home_environment` accepts optional `rooms` and `metrics`; `get_device_status` accepts
+optional `rooms`, `kinds`, and `states`. Results remain typed and sanitized. After the
+tool returns, the model receives the original user question and a bounded projection of
+the exposure-filtered measurements or states to generate its final answer. Exact repeated
+home-read calls within one turn reuse the first result. The final answer and typed
+snapshot are returned to the caller; Makers stores a generic summary in model history
+for home-read turns, so later turns do not automatically receive past measurements.
+Scene discovery and all writes remain outside this Phase 2 contract.
 
 ## Errors and cancellation
 

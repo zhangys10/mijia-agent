@@ -1,8 +1,8 @@
 """Run the local Python agent against the configured production dependencies.
 
 This is a deliberately explicit live-integration tool. It starts the real ASGI app on
-loopback and calls its public ``POST /ai/command`` boundary; it never bypasses the
-production console's execution policy.
+loopback and calls its canonical ``POST /ai/assistant`` boundary; it never bypasses the
+production console's home exposure or execution policy.
 """
 
 import argparse
@@ -50,7 +50,6 @@ from .config import Settings
 
 ACKNOWLEDGEMENT = "USE PRODUCTION SERVICES"
 DEFAULT_ENV_FILE = Path("adapters/edgeone/.env")
-DEFAULT_CONSOLE_REPO = Path("..") / "mijia-web-console"
 CONSOLE_TOKEN_SCRIPT = Path("scripts") / "generate-automation-token.ts"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -215,7 +214,8 @@ def confirm_production(skip_prompt: bool, input_fn=None) -> None:
         return
     print(
         "WARNING: this uses real production account/home data, incurs real model cost, "
-        "and follows the current production device-execution policy."
+        "and follows the current production device-execution policy. First use may install "
+        "local dependencies, link the EdgeOne project, and pull its production environment."
     )
     reader = input if input_fn is None else input_fn
     answer = reader(f'Type "{ACKNOWLEDGEMENT}" to continue: ').strip()
@@ -275,15 +275,16 @@ def generate_token(
     days: int,
     home: str | None,
     token_out: Path | None,
+    env_file: Path,
     popen=None,
 ) -> str:
     """Delegate token sealing to the console repo's offline generator.
 
     The cookie is passed through a private temporary file (never argv or env);
-    the generator auto-loads the console project's own `.env` for the sealing
-    secrets, so the Python process never touches Xiaomi session decryption or
-    the console's token secrets. The generated token returns through a pipe and
-    is never echoed or logged.
+    the generator loads the pulled production env file for the token secret
+    and its own checkout's .env for a missing Xiaomi session secret. Python
+    never reads either secret or decrypts the session. The generated token
+    returns through a pipe and is never echoed or logged.
     """
 
     if not (1 <= days <= 90):
@@ -306,6 +307,8 @@ def generate_token(
             str(script),
             "--session-file",
             str(cookie_path),
+            "--env-file",
+            str(env_file.expanduser().resolve()),
             "--days",
             str(days),
         ]
@@ -318,9 +321,9 @@ def generate_token(
                 env={
                     "PATH": os.environ.get("PATH", os.defpath),
                     "HOME": os.environ.get("HOME", ""),
-                    # The token's AES-GCM AAD binds the environment name; the
-                    # production console resolves APP_ENV || NODE_ENV, so the
-                    # generator must seal with the same env or verification fails.
+                    # Token AES-GCM AAD binds APP_ENV. Match the production
+                    # verifier even if the console checkout's .env says development.
+                    "APP_ENV": "production",
                     "NODE_ENV": "production",
                 },
                 cwd=str(console_repo),
@@ -333,8 +336,17 @@ def generate_token(
             raise CliError("Could not run the console token generator") from error
         _stdout, stderr = process.communicate()
         if process.returncode != 0:
-            detail = (stderr or "").strip().splitlines()
-            hint = detail[-1] if detail else "unknown error"
+            if "XIAOMI_SESSION_INVALID:" in (stderr or ""):
+                hint = (
+                    "XIAOMI_SESSION_INVALID: refresh the production xiaomi_session cookie "
+                    "or pull the matching production XIAOMI_SESSION_SECRET"
+                )
+            elif "AI_AUTOMATION_TOKEN_SECRET must be set" in (stderr or ""):
+                hint = "AI_AUTOMATION_TOKEN_SECRET is missing from the selected env file"
+            elif "Cannot read env file:" in (stderr or ""):
+                hint = "the selected env file could not be read by the console generator"
+            else:
+                hint = "unexpected Node error in the console token generator"
             raise CliError(f"Console token generator failed: {hint}")
         token = _stdout.strip().splitlines()[-1] if _stdout.strip() else ""
         if not token.startswith("v1.") or len(token) > MAX_AUTOMATION_TOKEN:
@@ -351,6 +363,14 @@ def generate_token(
             raise CliError(f"Could not write token file: {token_out}") from error
         print(f"Token written to {token_out} (mode 0600).")
     return token
+
+
+def resolve_console_repo(console_repo: Path | None) -> Path:
+    """Resolve the explicitly selected web-console checkout."""
+
+    if console_repo is None:
+        raise CliError("Token generation needs the web-console checkout; pass --console-repo PATH")
+    return console_repo.expanduser().resolve()
 
 
 def ensure_port_available(host: str, port: int) -> None:
@@ -408,7 +428,6 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
     )
     command = [
         sys.executable,
-        "-P",
         "-m",
         "uvicorn",
         "mijia_agent.app:create_app",
@@ -422,7 +441,7 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
         "warning",
     ]
     try:
-        return subprocess.Popen(command, env=child_env, stdin=subprocess.DEVNULL)
+        return subprocess.Popen(command, cwd=package_root, env=child_env, stdin=subprocess.DEVNULL)
     except OSError as error:
         raise CliError("Could not start the local agent") from error
 
@@ -515,6 +534,7 @@ def send_assistant(
     text: str,
     conversation_id: str | None,
     home: str | None,
+    channel: str = "web",
 ) -> tuple[dict, str]:
     key = "local-prod-" + secrets.token_hex(16)
     print(f"Request-Key: {key}")
@@ -522,7 +542,7 @@ def send_assistant(
         response = client.post(
             base_url + "/ai/assistant",
             headers={"Authorization": "Bearer " + token, "Idempotency-Key": key},
-            json=assistant_payload(text, conversation_id, home),
+            json=assistant_payload(text, conversation_id, home, channel),
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as error:
@@ -545,10 +565,28 @@ def send_assistant(
     return body, key
 
 
-def print_assistant_response(body: dict) -> None:
+def print_assistant_response(
+    body: dict, channel: str = "web", expect_tool: str | None = None
+) -> None:
     answer = body.get("answer")
     if not isinstance(answer, dict) or not isinstance(answer.get("text"), str):
         raise CliError("Agent returned an invalid assistant response")
+    speech_text = None
+    if channel in {"siri", "voice"}:
+        speech_text = answer.get("speechText")
+        if not isinstance(speech_text, str) or len(speech_text) > 280:
+            raise CliError("Agent did not return a bounded speechText for the selected channel")
+    if expect_tool is not None:
+        events = body.get("toolEvents")
+        if not isinstance(events, list) or not any(
+            isinstance(event, dict)
+            and event.get("name") == expect_tool
+            and event.get("status") in {"success", "partial"}
+            for event in events
+        ):
+            raise CliError(f"Expected successful home read tool was not observed: {expect_tool}")
+    if speech_text is not None:
+        print(f"speechText: {speech_text}")
     print(f"outcome: {body.get('outcome')}")
     print(f"answer: {answer['text']}")
     for event in body.get("toolEvents") or []:
@@ -602,6 +640,8 @@ def run_assistant_repl(
     token: str,
     one_shot: str | None,
     home: str | None,
+    channel: str = "web",
+    expect_tool: str | None = None,
     input_fn=input,
     client_factory=httpx.Client,
 ) -> None:
@@ -617,8 +657,10 @@ def run_assistant_repl(
                     break
             if not text or text in {"/quit", "/exit"}:
                 break
-            body, _key = send_assistant(client, base_url, token, text, conversation_id, home)
-            print_assistant_response(body)
+            body, _key = send_assistant(
+                client, base_url, token, text, conversation_id, home, channel
+            )
+            print_assistant_response(body, channel, expect_tool)
             if isinstance(body.get("conversationId"), str):
                 conversation_id = body["conversationId"]
             if one_shot is not None:
@@ -841,7 +883,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--console-repo",
         type=Path,
-        default=DEFAULT_CONSOLE_REPO,
+        default=None,
         help="Path to the mijia-web-console checkout that owns token generation",
     )
     parser.add_argument(
@@ -855,6 +897,17 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--token-file", type=Path)
     parser.add_argument("--message", help="Send one prompt and exit instead of opening a REPL")
+    parser.add_argument(
+        "--channel",
+        choices=("web", "siri", "voice", "automation"),
+        default="web",
+        help="Assistant channel to include in the canonical turn request",
+    )
+    parser.add_argument(
+        "--expect-tool",
+        choices=("get_home_environment", "get_device_status"),
+        help="Require this exposed home-read tool to complete successfully (requires --message)",
+    )
     parser.add_argument(
         "--idempotency-key",
         help=(
@@ -872,8 +925,46 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def prepare_local_prod(argv: list[str], env_file: Path | None = None) -> None:
+    """Bootstrap first-run local dependencies, then continue inside the repo venv."""
+    repo_root = Path(__file__).resolve().parents[2]
+    setup_script = repo_root / "scripts" / "local-prod-setup.sh"
+    if not setup_script.is_file():
+        raise CliError("Local setup script is missing from this repository checkout")
+    completed = subprocess.run(["bash", str(setup_script)], cwd=repo_root, check=False)
+    if completed.returncode:
+        raise CliError("Local setup did not complete; see the setup error above")
+
+    interpreter = repo_root / ".venv" / "bin" / "python"
+    if not interpreter.is_file():
+        raise CliError("Local setup did not create the Python environment")
+    if Path(sys.prefix).resolve() != interpreter.parent.parent.resolve():
+        resumed_args = list(argv)
+        if env_file is not None:
+            normalized_args: list[str] = []
+            skip_env_file_value = False
+            for argument in resumed_args:
+                if skip_env_file_value:
+                    skip_env_file_value = False
+                    continue
+                if argument == "--env-file":
+                    skip_env_file_value = True
+                    continue
+                if argument.startswith("--env-file="):
+                    continue
+                normalized_args.append(argument)
+            resumed_args = [*normalized_args, "--env-file", str(env_file)]
+        if "--i-understand-this-uses-production" not in resumed_args:
+            resumed_args.append("--i-understand-this-uses-production")
+        os.execv(
+            str(interpreter),
+            [str(interpreter), "-m", "mijia_agent.local_prod", *resumed_args],
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = create_parser().parse_args(argv)
+    original_argv = list(sys.argv[1:] if argv is None else argv)
+    args = create_parser().parse_args(original_argv)
     try:
         if not 1 <= args.port <= 65535:
             raise CliError("Port must be between 1 and 65535")
@@ -889,6 +980,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run" and args.profile != "live-read":
             raise CliError("run currently requires --profile live-read")
+        if args.expect_tool and (args.command != "run" or not args.message):
+            raise CliError("--expect-tool requires run --message")
+        if args.channel != "web" and args.command != "run":
+            raise CliError("--channel is only supported by run")
+        if args.command == "run":
+            confirm_production(args.i_understand_this_uses_production)
+            repo_root = Path(__file__).resolve().parents[2]
+            if args.env_file == DEFAULT_ENV_FILE:
+                args.env_file = repo_root / DEFAULT_ENV_FILE
+            elif not args.env_file.is_absolute():
+                args.env_file = args.env_file.resolve()
+            prepare_local_prod(original_argv, args.env_file)
         env = build_environment(args.env_file)
         settings = production_settings(env)
         print(target_summary(settings, args.host, args.port))
@@ -898,11 +1001,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "generate-token":
             cookie = load_cookie(args.cookie_file)
             generate_token(
-                args.console_repo,
+                resolve_console_repo(args.console_repo),
                 cookie,
                 args.token_days,
                 args.home,
                 args.token_out,
+                args.env_file,
             )
             if args.token_out is None:
                 print(
@@ -911,38 +1015,29 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 0
 
-        confirm_production(args.i_understand_this_uses_production)
         if args.token_file is not None:
             token = load_token(args.token_file)
         elif args.cookie_file is not None:
             # Non-interactive: generate the token from the provided cookie file.
             cookie = load_cookie(args.cookie_file)
             token = generate_token(
-                args.console_repo,
+                resolve_console_repo(args.console_repo),
                 cookie,
                 args.token_days,
                 args.home,
                 None,
+                args.env_file,
             )
         else:
-            # Offer cookie-based generation inline; a path or 'token' pastes a ready-made token.
-            choice = input(
-                "Paste the xiaomi_session cookie to generate a token, or enter a token file "
-                "path, or type 'token' to paste a ready-made token: "
-            ).strip()
-            if choice == "token":
-                token = load_token(None)
-            elif choice and Path(choice).expanduser().is_file():
-                token = load_token(Path(choice).expanduser())
-            else:
-                cookie = load_cookie(None, prompt_fn=lambda _prompt: choice)
-                token = generate_token(
-                    args.console_repo,
-                    cookie,
-                    args.token_days,
-                    args.home,
-                    None,
-                )
+            cookie = load_cookie(None)
+            token = generate_token(
+                resolve_console_repo(args.console_repo),
+                cookie,
+                args.token_days,
+                args.home,
+                None,
+                args.env_file,
+            )
         ensure_port_available(args.host, args.port)
         log_dir, log_path = private_log_path()
         env["AI_LLM_LOG_PATH"] = str(log_path)
@@ -952,7 +1047,14 @@ def main(argv: list[str] | None = None) -> int:
             process = start_agent(env, args.host, args.port)
             base_url = f"http://{args.host}:{args.port}"
             wait_until_ready(process, base_url, READINESS_TIMEOUT_SECONDS)
-            run_assistant_repl(base_url, token, args.message, args.home)
+            run_assistant_repl(
+                base_url,
+                token,
+                args.message,
+                args.home,
+                args.channel,
+                args.expect_tool,
+            )
         except (CliError, KeyboardInterrupt) as error:
             primary_error = error
             raise

@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -58,6 +58,7 @@ class AssistantTurn(StrictModel):
     automationToken: SecretStr
     locale: Literal["zh-CN", "en-US"] = "zh-CN"
     timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    channel: Literal["web", "siri", "voice", "automation"] = "web"
     history: Annotated[list[Message], Field(max_length=12)] = Field(default_factory=list)
 
     @field_validator("message")
@@ -163,6 +164,61 @@ class DeviceStatus(StrictModel):
     warnings: Annotated[list[str], Field(max_length=8)] = Field(default_factory=list)
 
 
+class HomeCapability(StrictModel):
+    name: Literal["get_home_environment", "get_device_status"]
+    available: bool
+    risk: Literal["home_read"]
+
+
+class HomeCapabilityProjection(StrictModel):
+    rooms: Annotated[list[str], Field(max_length=20)] = Field(default_factory=list)
+    measurementTypes: Annotated[list[HomeMetric], Field(max_length=9)] = Field(default_factory=list)
+    deviceKinds: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=40)]], Field(max_length=40)
+    ] = Field(default_factory=list)
+    roomMetrics: Annotated[
+        dict[
+            Annotated[str, Field(min_length=1, max_length=200)],
+            Annotated[list[HomeMetric], Field(max_length=9)],
+        ],
+        Field(max_length=20),
+    ]
+    roomDeviceKinds: Annotated[
+        dict[
+            Annotated[str, Field(min_length=1, max_length=200)],
+            Annotated[
+                list[Annotated[str, Field(min_length=1, max_length=40)]], Field(max_length=40)
+            ],
+        ],
+        Field(max_length=20),
+    ]
+    sceneSearchAvailable: bool
+
+    @model_validator(mode="after")
+    def validate_exposure_lists(self):
+        rooms = set(self.rooms)
+        metrics = set(self.measurementTypes)
+        kinds = set(self.deviceKinds)
+        if any(
+            room not in rooms or any(metric not in metrics for metric in values)
+            for room, values in self.roomMetrics.items()
+        ):
+            raise ValueError("invalid room metrics")
+        if any(
+            room not in rooms or any(kind not in kinds for kind in values)
+            for room, values in self.roomDeviceKinds.items()
+        ):
+            raise ValueError("invalid room device kinds")
+        return self
+
+
+class HomeCapabilities(StrictModel):
+    contextVersion: Literal["1"]
+    exposureRevision: Annotated[str, Field(min_length=1, max_length=64)]
+    capabilities: Annotated[list[HomeCapability], Field(max_length=4)] = Field(default_factory=list)
+    projection: HomeCapabilityProjection
+
+
 class Usage(StrictModel):
     promptTokens: Annotated[int, Field(ge=0)] = 0
     completionTokens: Annotated[int, Field(ge=0)] = 0
@@ -202,8 +258,15 @@ class Result(StrictModel):
 
 
 class AgentError(Exception):
-    def __init__(self, code: str, status: int = 502, usage: Usage | None = None):
+    def __init__(
+        self,
+        code: str,
+        status: int = 502,
+        usage: Usage | None = None,
+        diagnostic_code: str | None = None,
+    ):
         super().__init__(code)
         self.code = code
         self.status = status
         self.usage = usage
+        self.diagnostic_code = diagnostic_code

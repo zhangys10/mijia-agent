@@ -14,6 +14,15 @@ MAX_HISTORY_MESSAGES = 12
 MAX_HISTORY_CONTENT = 2000
 
 
+def model_history_answer(response: AssistantResponse) -> str:
+    """Return conversational context without persisting a tool result or live reading."""
+    if response.outcome == "clarification":
+        return response.answer.text[:MAX_HISTORY_CONTENT]
+    if response.tool_events:
+        return "Answered the user's previous request using a fresh lookup."
+    return response.answer.text[:MAX_HISTORY_CONTENT]
+
+
 class ConversationRepository:
     def __init__(self):
         self._messages: dict[str, list[ModelMessage]] = {}
@@ -28,7 +37,7 @@ class ConversationRepository:
     ) -> None:
         messages = [
             ModelMessage(role="user", content=user_message.strip()[:MAX_HISTORY_CONTENT]),
-            ModelMessage(role="assistant", content=self._history_response(response)),
+            ModelMessage(role="assistant", content=model_history_answer(response)),
         ]
         async with self._lock:
             key = self._key(ctx)
@@ -39,12 +48,3 @@ class ConversationRepository:
         token = ctx.automation_token.get_secret_value() if ctx.automation_token else ""
         material = "\x00".join((token, ctx.home_selector or "", ctx.conversation_id))
         return hashlib.sha256(material.encode()).hexdigest()
-
-    @staticmethod
-    def _history_response(response: AssistantResponse) -> str:
-        if response.outcome == "clarification":
-            return response.answer.text[:MAX_HISTORY_CONTENT]
-        if response.tool_events:
-            names = ", ".join(event.name for event in response.tool_events)
-            return f"Answered the user's request using {names}."
-        return response.answer.text[:MAX_HISTORY_CONTENT]
