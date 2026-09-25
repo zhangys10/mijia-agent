@@ -19,6 +19,7 @@ from mijia_assistant.capabilities import (
     HomeEnvironmentCapability,
 )
 from mijia_assistant.conversation import ConversationEngine, ConversationRepository
+from mijia_assistant.conversation.history import model_history_answer
 from mijia_assistant.models import AssistantContext, AssistantError, ModelMessage
 from mijia_assistant.providers import OpenAICompatibleProvider
 
@@ -342,7 +343,6 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             )
             history = [ModelMessage(role=item.role, content=item.content) for item in turn.history]
             result = await app.state.assistant_engine.run(context, turn.message, history)
-            await app.state.conversation_repository.append(context, turn.message, result)
             event = next(
                 (
                     item
@@ -370,6 +370,7 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                     "continueConversation": result.answer.continue_conversation,
                 },
                 "message": result.answer.text,
+                "historyAnswer": model_history_answer(result),
                 "speak": result.answer.text[:280]
                 if turn.channel in {"siri", "voice"}
                 else result.answer.text,

@@ -930,6 +930,31 @@ def test_history_allows_only_normalized_messages():
         )
     )
     assert result.answer.text == "follow-up"
+    messages = provider.requests[0][0]
+    assert "Handle only the latest user turn" in messages[0].content
+    assert [item.role for item in messages] == ["system", "user"]
+    assert '"content":"I answered the living-room query."' in messages[1].content
+    assert messages[1].content.endswith("and the bedroom?")
+
+
+def test_previous_home_question_is_reference_data_for_weather_turn():
+    provider = ScriptedProvider(ModelTurn(content="The weather is sunny."))
+    history = [
+        ModelMessage(role="user", content="Which lights are on?"),
+        ModelMessage(
+            role="assistant", content="Answered the user's previous request using a fresh lookup."
+        ),
+    ]
+    result = asyncio.run(
+        ConversationEngine(provider, CapabilityRegistry()).run(
+            context(), "What's the weather in Shanghai?", history
+        )
+    )
+    assert result.answer.text == "The weather is sunny."
+    messages = provider.requests[0][0]
+    assert [item.role for item in messages] == ["system", "user"]
+    assert '"content":"Which lights are on?"' in messages[1].content
+    assert messages[1].content.endswith("What's the weather in Shanghai?")
 
 
 def app_settings(**overrides):
@@ -1150,6 +1175,8 @@ def test_internal_canonical_ingress_preserves_partial_home_data_and_model_answer
     assert body["toolEvents"] == [{"name": "get_home_environment", "status": "partial"}]
     assert body["homeStatus"]["groups"][0]["latest"]["value"] == 0.021
     assert body["data"]["type"] == "home_environment"
+    assert body["historyAnswer"] == "Answered the user's previous request using a fresh lookup."
+    assert "0.021" not in body["historyAnswer"]
 
 
 def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
@@ -1181,13 +1208,10 @@ def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
     assert second.status_code == 200
     assert second.json()["answer"]["text"] == "上海市目前没有配置可用的天气数据源。"
     messages = provider.requests[0][0]
-    assert [message.content for message in messages if message.role == "user"] == [
-        "今天天气怎么样？",
-        "locale=zh-CN; timezone=Asia/Shanghai; channel=web\n上海市",
-    ]
-    assert "你想查询哪个城市的天气？" in [
-        message.content for message in messages if message.role == "assistant"
-    ]
+    assert [message.role for message in messages] == ["system", "user"]
+    assert '"content":"今天天气怎么样？"' in messages[1].content
+    assert '"content":"你想查询哪个城市的天气？"' in messages[1].content
+    assert messages[1].content.endswith("locale=zh-CN; timezone=Asia/Shanghai; channel=web\n上海市")
 
 
 def test_stream_normalizer_orders_tool_deltas_and_has_one_terminal_event():

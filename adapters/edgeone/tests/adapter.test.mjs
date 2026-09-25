@@ -42,7 +42,7 @@ test("Makers adapter forwards a bounded turn, stores history, and replays withou
     const body = JSON.parse(options.body);
     assert.equal(body.automationToken, "opaque-test-token");
     assert.equal(body.history.length, 0);
-    return Response.json({ requestId: body.requestId, conversationId: body.conversationId, message: "场景列表", intent: "list_scenes", usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } });
+    return Response.json({ requestId: body.requestId, conversationId: body.conversationId, message: "场景列表", historyAnswer: "Answered the user's previous request using a fresh lookup.", intent: "list_scenes", usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } });
   });
   assert.equal((await onRequest(context)).status, 200);
   context.request.body.requestId = "req_example_000002";
@@ -73,7 +73,7 @@ test("memory append failure after a successful turn neither fails the reply nor 
   let appendCalls = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
     if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
-    return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "conv_test_123", message: "回复", intent: "none" });
+    return Response.json({ requestId: JSON.parse(options.body).requestId, conversationId: "conv_test_123", message: "回复", historyAnswer: "回复", intent: "none" });
   });
   const original = context.store.appendMessage;
   // First append throws (simulating a store blip), the retry path recovers.
@@ -89,6 +89,22 @@ test("memory append failure after a successful turn neither fails the reply nor 
   const replay = await (await onRequest(context)).json();
   assert.equal(replay.requestId, "req_example_000002");
   assert.equal((replay.usage?.totalTokens) ?? 0, 0);
+});
+
+test("model history appends each completed turn in user then assistant order", async t => {
+  const { context } = fixture();
+  const roles = [];
+  context.store.appendMessage = async ({ role }) => {
+    if (role === "user") await new Promise(resolve => setTimeout(resolve, 10));
+    roles.push(role);
+  };
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
+    const body = JSON.parse(options.body);
+    return Response.json({ requestId: body.requestId, conversationId: body.conversationId, message: "Done.", historyAnswer: "Done.", intent: "none" });
+  });
+  assert.equal((await onRequest(context)).status, 200);
+  assert.deepEqual(roles, ["user", "assistant"]);
 });
 
 test("unparseable upstream body is a finalized 502 that replays as 502, not 409", async t => {
@@ -151,7 +167,7 @@ test("structured homeStatus survives forwarding, receipt storage, and replay wit
     groups: [{ metric: "temperature", label: "温度", unit: "°C", latest: { value: 25.5, unit: "°C", sourceLabel: "客厅温湿度计", roomName: "客厅", capturedAt: "2026-09-20T08:00:00Z", freshness: "fresh" }, readings: [] }],
     warnings: ["部分设备读取失败"],
   };
-  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "客厅温度当前为 25.5°C。", intent: "get_home_status", homeStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "客厅温度当前为 25.5°C。", historyAnswer: "Answered the user's previous request using a fresh lookup.", intent: "get_home_status", homeStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
   t.mock.method(globalThis, "fetch", async (url, options) => {
     if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
@@ -159,7 +175,7 @@ test("structured homeStatus survives forwarding, receipt storage, and replay wit
   const first = await (await onRequest(context)).json();
   assert.deepEqual(first.homeStatus, homeStatus);
   assert.equal(first.message, "客厅温度当前为 25.5°C。");
-  assert.equal([...history.values()][0][1].content, "Answered the user's current home environment question.");
+  assert.equal([...history.values()][0][1].content, pythonResult.historyAnswer);
   context.request.body.requestId = "req_example_000002";
   const replay = await (await onRequest(context)).json();
   assert.deepEqual(replay.homeStatus, homeStatus);
@@ -176,7 +192,7 @@ test("structured deviceStatus survives forwarding, receipt storage, and replay w
     rooms: [{ room: "客厅", items: [{ name: "客厅吸顶灯", kind: "light", state: "on", online: true }] }],
     warnings: [],
   };
-  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "客厅吸顶灯当前已开启。", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
+  const pythonResult = { requestId: "req_example_000001", conversationId: "conv_test_123", message: "客厅吸顶灯当前已开启。", historyAnswer: "Answered the user's previous request using a fresh lookup.", intent: "get_device_status", deviceStatus, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15, estimated: false } };
   t.mock.method(globalThis, "fetch", async (url, options) => {
     if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
     return Response.json({ ...pythonResult, requestId: JSON.parse(options.body).requestId });
@@ -184,12 +200,38 @@ test("structured deviceStatus survives forwarding, receipt storage, and replay w
   const first = await (await onRequest(context)).json();
   assert.deepEqual(first.deviceStatus, deviceStatus);
   assert.equal(first.message, "客厅吸顶灯当前已开启。");
-  assert.equal([...history.values()][0][1].content, "Answered the user's current device status question.");
+  assert.equal([...history.values()][0][1].content, pythonResult.historyAnswer);
   context.request.body.requestId = "req_example_000002";
   const replay = await (await onRequest(context)).json();
   assert.deepEqual(replay.deviceStatus, deviceStatus);
   assert.equal(replay.requestId, "req_example_000002");
   assert.equal(replay.usage.totalTokens, 0);
+});
+
+test("home read history stays redacted while later turns retain conversation context", async t => {
+  const { context, history } = fixture();
+  const forwardedHistories = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test", homeId: "home-test", scopes: ["ai:chat"] });
+    const body = JSON.parse(options.body);
+    forwardedHistories.push(body.history);
+    return Response.json({ requestId: body.requestId, conversationId: body.conversationId,
+      message: body.message === "查看客厅温度" ? "客厅温度为 25°C。" : "上海今天晴。",
+      historyAnswer: body.message === "查看客厅温度" ? "Answered the user's previous request using a fresh lookup." : "上海今天晴。",
+      intent: body.message === "查看客厅温度" ? "get_home_status" : "none",
+      ...(body.message === "查看客厅温度" ? { homeStatus: { completeness: "complete" } } : {}) });
+  });
+  context.request.body.message = "查看客厅温度";
+  assert.equal((await onRequest(context)).status, 200);
+  context.request.body.requestId = "req_example_000002";
+  context.request.body.message = "上海天气怎么样？";
+  context.request.body.idempotencyKey = "idem_test_example_2";
+  assert.equal((await onRequest(context)).status, 200);
+  assert.deepEqual(forwardedHistories, [[], [
+    { role: "user", content: "查看客厅温度" },
+    { role: "assistant", content: "Answered the user's previous request using a fresh lookup." },
+  ]]);
+  assert.equal(history.size, 1);
 });
 
 test("finalized upstream failure replay retains known model usage", async t => {

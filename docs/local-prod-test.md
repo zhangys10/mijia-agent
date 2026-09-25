@@ -11,20 +11,25 @@ The workflow does not add an execution bypass. Action-like model output is rejec
 
 ## Prerequisites
 
-- Python 3.11+ and the repo installed for development (`pip install --no-deps -e .`).
-- Production variables pulled with `edgeone makers env pull` (or `edgeone makers dev`) into
-  the ignored `adapters/edgeone/.env`.
+- Python 3.11+, Node.js/npm, and the EdgeOne CLI logged into the account that owns `mijia-agent`.
+- The first acknowledged `run --profile live-read` bootstraps the Python environment, builds
+  the adapter, links the `mijia-agent` Makers project, and pulls its production environment
+  into the ignored `adapters/edgeone/.env`. It reuses those setup results on later runs.
 - A sealed `xiaomi_session` cookie copied from the logged-in production console
   (DevTools → Application → Cookies). The CLI turns it into an automation token by
   delegating to the console repo's offline generator — the Python process never
   implements Xiaomi session decryption.
+
+The first-run setup replaces an existing `adapters/edgeone/.env` with the production
+environment pulled from EdgeOne. `check` and `smoke --profile fake` do not run setup or
+contact EdgeOne.
 
 The pulled env must include the production Gateway fields, `AI_PYTHON_INTERNAL_SECRET`,
 `AI_TOOLS_INTERNAL_SECRET`, and an HTTPS production `MIJIA_CONSOLE_BASE_URL`. It may carry
 an `AI_GATEWAY_ALLOWED_MODELS` value that includes the configured model. The CLI validates
 that allowlist without weakening or modifying the deployment policy.
 
-## 1. Check the target without making network calls
+## 1. Check an already prepared target without making network calls
 
 ```bash
 mijia-agent-local-prod check
@@ -33,6 +38,9 @@ mijia-agent-local-prod check
 `check` parses the env file without shell evaluation, validates it with the same `Settings`
 used by the app, and displays only the environment, hostnames, model, and loopback address.
 It performs no Gateway, console, or agent request.
+On a fresh checkout, the first acknowledged `run --profile live-read` performs setup and
+configuration validation before it asks for a token or sends a model request. Run `check`
+after that setup to repeat the local validation without network calls.
 
 A common stale pull contains:
 
@@ -60,17 +68,16 @@ deadline handling, and physical-write rejection.
 mijia-agent-local-prod run --profile live-read --console-repo /path/to/mijia-web-console
 ```
 
-The CLI will:
+The CLI will, after the production acknowledgement:
 
-1. print the redacted production target;
-2. warn about real data, cost, and possible effects;
-3. require the exact acknowledgement `USE PRODUCTION SERVICES`;
-4. generate the automation token from your pasted `xiaomi_session` cookie by default —
+1. run the first-use local setup when its Python or EdgeOne state is missing;
+2. print the redacted production target;
+3. generate the automation token from your pasted `xiaomi_session` cookie by default —
    paste the cookie at the hidden prompt, and the CLI delegates to the
    console repo's offline generator (use `--token-file` for a ready-made token);
-5. start the real Uvicorn app on `127.0.0.1:8000`;
-6. send each prompt through the canonical `POST /ai/assistant` HTTP boundary; and
-7. stop the child process and delete its private LLM log on exit.
+4. start the real Uvicorn app on `127.0.0.1:8000`;
+5. send each prompt through the canonical `POST /ai/assistant` HTTP boundary; and
+6. stop the child process and delete its private LLM log on exit.
 
 Use `/exit`, `/quit`, Ctrl-D, or Ctrl-C to stop. Every prompt gets a new random visible
 `Request-Key`. The CLI never automatically retries a timeout or disconnect. Physical writes are
