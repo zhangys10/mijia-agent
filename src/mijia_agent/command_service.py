@@ -183,9 +183,7 @@ class CommandService:
             reply = args.get("replyMessage")
             if reply is not None and not isinstance(reply, str):
                 raise _ModelResponseRejected("invalid replyMessage")
-            scene = next(
-                (s for s in scenes if s.risk == "low" and s.alias == args.get("sceneId")), None
-            )
+            scene = next((s for s in scenes if s.alias == args.get("sceneId")), None)
             if scene is None:
                 raise _ModelResponseRejected("unknown scene")
             return CommandDecision(

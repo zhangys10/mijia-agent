@@ -58,7 +58,6 @@ COMMAND_ERROR_MAP = {
         409,
         "场景内容已变化，请重新确认后再试。",
     ),
-    "AI_SCENE_RISK_BLOCKED": ("AI_SCENE_RISK_BLOCKED", 403, "该场景包含当前不支持的操作。"),
     "AI_SCENE_NOT_EXPOSED": ("AI_SCENE_NOT_EXPOSED", 403, "该场景未获家庭成员授权。"),
     "AI_EXPOSURE_STORE_UNAVAILABLE": (
         "AI_EXPOSURE_STORE_UNAVAILABLE",

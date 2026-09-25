@@ -71,17 +71,19 @@ token only after a home capability is selected.
 | Tool | Arguments | Current behavior |
 |---|---|---|
 | `authorize` | `{}` | `{ "ok": true, "principalId", "homeId", "scopes": ["ai:chat"] }` after fresh token authentication/home checks; adapter-only, not model-visible |
-| `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "risk", "actionSummaries" }] }` |
+| `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
 | `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Rejected by the canonical automation-token ingress until it receives a per-request console-issued action scope. The deprecated command router also rejects before dispatch. Do not enable physical writes until all operational gates pass. |
 
-Scene discovery returns a content revision hash and normalized action summaries. Only
-the deprecated command router currently receives the old activation schema, and it
-rejects every write before dispatch. The canonical assistant does not register a scene
-action capability. The automation-token tools ingress rejects direct activation without
-a per-request console-issued action scope. Scene aliases, action summaries and revision
-hashes are not authorization. Keep `AI_SCENE_EXECUTION_ENABLED` unset until the deployed
+Scene discovery returns a content revision hash and normalized action summaries. The
+console exposes enabled manual scenes through individual approval or a confirmed
+home-level approval bypass; no static low-risk scene classification is applied. Bypass
+also covers future enabled scenes and scene edits in that home. The deprecated command
+router rejects every write before dispatch. The canonical assistant does not register a
+scene action capability. The automation-token tools ingress rejects direct activation
+without a per-request console-issued action scope. Scene aliases, action summaries and
+revision hashes are not authorization. Keep `AI_SCENE_EXECUTION_ENABLED` unset until the deployed
 operational gates in `docs/TODO.md` pass and action registration moves to the canonical
 assistant.
 When enabled, a positive Xiaomi scene-run acknowledgment is reported as “request

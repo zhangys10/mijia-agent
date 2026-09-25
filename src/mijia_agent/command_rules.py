@@ -115,11 +115,7 @@ def find_fallback_scene(text: str, scenes: list[Scene]) -> Scene | None:
     if not any(phrase in normalized for phrase in FALLBACK_PHRASES):
         return None
     return next(
-        (
-            s
-            for s in scenes
-            if s.risk == "low" and any(phrase in s.name for phrase in FALLBACK_PHRASES)
-        ),
+        (s for s in scenes if any(phrase in s.name for phrase in FALLBACK_PHRASES)),
         None,
     )
 
@@ -135,8 +131,6 @@ def recover_intent(
     norm_llm = normalize(llm_output or "")
     claims = CLAIM_EXECUTION.search(norm_llm) is not None
     for scene in scenes:
-        if scene.risk != "low":
-            continue
         scene_name = normalize(scene.name)
         if not scene_name:
             continue
@@ -190,7 +184,7 @@ def sanitize_llm_output(output: str | None, scenes: list[Scene]) -> str | None:
 
 def activate_scene_tool(scenes: list[Scene]) -> dict:
     """The single write tool, verbatim console schema parity."""
-    eligible = [scene for scene in scenes if scene.risk == "low"]
+    eligible = scenes
     return {
         "type": "function",
         "function": {
@@ -253,7 +247,7 @@ def chat_tools(scenes: list[Scene], allow_activate: bool) -> list[dict]:
             },
         },
     ]
-    if allow_activate and any(scene.risk == "low" for scene in scenes):
+    if allow_activate and scenes:
         tools.append(activate_scene_tool(scenes))
     return tools
 
@@ -279,7 +273,6 @@ def user_content(text: str, locale: str, timezone: str, scenes: list[Scene]) -> 
                     ],
                 }
                 for s in scenes
-                if s.risk == "low"
             ],
         },
         ensure_ascii=False,
