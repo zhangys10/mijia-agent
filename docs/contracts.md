@@ -236,14 +236,12 @@ same soft boundary the console had — not durable).
 
 `home` accepts a home ID, exact name, or substring; omitted means the token-bound home,
 then the account's first home. `history` is at most 32 messages; each is trimmed to 300
-chars. Success responses mirror the console `AiCommandResponse`:
+chars. The current route can return a non-action `AiCommandResponse`, for example:
 
 ```json
 { "requestId": "req_…", "conversationId": "conv_…", "conversationReset": false,
-  "turnIndex": 1, "status": "completed", "intent": "activate_scene",
-  "sceneId": "scene_<opaque-alias>", "sceneName": "回家模式",
-  "message": "好的，已开启回家模式", "execution": { "status": "success", "succeeded": 1,
-  "failed": 0 }, "decisionSource": "llm", "llmOutput": "…" }
+  "turnIndex": 1, "status": "not_understood", "intent": "none",
+  "message": "请告诉我具体的场景名称。", "decisionSource": "llm", "llmOutput": "…" }
 ```
 
 Executor status always wins over model text. Public error codes: `LLM_TIMEOUT` (504),
