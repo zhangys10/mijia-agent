@@ -1,7 +1,6 @@
 import json
 import stat
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -160,54 +159,6 @@ def test_confirmation_requires_exact_phrase():
 def test_confirmation_rejects_non_ascii_without_traceback():
     with pytest.raises(local_prod.CliError, match="nothing was started"):
         local_prod.confirm_production(False, input_fn=lambda _prompt: "使用生产服务")
-
-
-def test_prepare_local_prod_runs_setup_and_reexecs_in_repository_venv(monkeypatch):
-    repo_root = Path(local_prod.__file__).resolve().parents[2]
-    setup_script = repo_root / "scripts" / "local-prod-setup.sh"
-    interpreter = repo_root / ".venv" / "bin" / "python"
-    setup_calls = []
-    exec_calls = []
-    original_is_file = Path.is_file
-
-    def is_file(path):
-        if path == interpreter:
-            return True
-        return original_is_file(path)
-
-    monkeypatch.setattr(Path, "is_file", is_file)
-    monkeypatch.setattr(local_prod.sys, "prefix", "/outside-repo-venv")
-    monkeypatch.setattr(
-        local_prod.subprocess,
-        "run",
-        lambda command, cwd, check: (
-            setup_calls.append((command, cwd, check)) or SimpleNamespace(returncode=0)
-        ),
-    )
-    monkeypatch.setattr(local_prod.os, "execv", lambda *args: exec_calls.append(args))
-
-    env_file = repo_root / "custom-prod.env"
-    local_prod.prepare_local_prod(
-        ["run", "--message", "hello", "--env-file", "relative.env"], env_file
-    )
-
-    assert setup_calls == [(["bash", str(setup_script)], repo_root, False)]
-    assert exec_calls == [
-        (
-            str(interpreter),
-            [
-                str(interpreter),
-                "-m",
-                "mijia_agent.local_prod",
-                "run",
-                "--message",
-                "hello",
-                "--env-file",
-                str(env_file),
-                "--i-understand-this-uses-production",
-            ],
-        )
-    ]
 
 
 def test_build_environment_preserves_default_model_allowlist(tmp_path):
@@ -512,8 +463,6 @@ def test_run_requires_acknowledgement_before_token_or_process(tmp_path, monkeypa
     monkeypatch.setattr("builtins.input", lambda _prompt: "no")
     monkeypatch.setattr(local_prod, "load_token", lambda *_args: pytest.fail("read token"))
     monkeypatch.setattr(local_prod, "start_agent", lambda *_args: pytest.fail("started process"))
-    monkeypatch.setattr(local_prod, "prepare_local_prod", lambda *_args: pytest.fail("ran setup"))
-
     assert local_prod.main(["run", "--env-file", str(path)]) == 2
 
 
@@ -523,8 +472,6 @@ def test_run_prompts_for_cookie_without_echo(tmp_path, monkeypatch, capsys):
     captured = {}
     monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("visible cookie prompt"))
     monkeypatch.setattr(local_prod.getpass, "getpass", lambda _prompt: "fake-cookie")
-    monkeypatch.setattr(local_prod, "prepare_local_prod", lambda _args, _env_file: None)
-
     def fake_generate(_repo, cookie, _days, _home, _out, _env_file):
         captured["cookie"] = cookie
         return "v1.fake-token"
@@ -564,7 +511,6 @@ def test_run_cleans_private_log_when_child_start_fails(tmp_path, monkeypatch):
     log_path.touch(mode=0o600)
 
     monkeypatch.setattr(local_prod, "private_log_path", lambda: (log_dir, log_path))
-    monkeypatch.setattr(local_prod, "prepare_local_prod", lambda _args, _env_file: None)
     monkeypatch.setattr(local_prod, "ensure_port_available", lambda *_args: None)
     monkeypatch.setattr(
         local_prod, "start_agent", lambda *_args: (_ for _ in ()).throw(local_prod.CliError("no"))
