@@ -64,7 +64,7 @@ def test_build_environment_isolated_and_policy_preserving(tmp_path):
     write_env(path, PROD_ENV | {"XIAOMI_SESSION_SECRET": "must-not-reach-python"})
     inherited = {
         "PATH": "/bin",
-        "AI_ENVIRONMENT": "development",
+        "AI_ENVIRONMENT": "preview",
         "UNCHANGED": "yes",
         "AI_AUTOMATION_TOKEN_SECRET": "must-not-reach-python",
         "HTTPS_PROXY": "http://proxy.example:8080",
@@ -295,8 +295,7 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     # Node reads the selected token env file and the console's session env;
     # Python passes only the path and production token binding.
     child_env = captured["env"]
-    assert set(child_env) <= {"PATH", "HOME", "APP_ENV", "NODE_ENV"}
-    assert child_env["APP_ENV"] == "production"
+    assert set(child_env) <= {"PATH", "HOME", "NODE_ENV"}
     assert child_env["NODE_ENV"] == "production"
     assert "AI_AUTOMATION_TOKEN_SECRET" not in child_env
     assert "XIAOMI_SESSION_SECRET" not in child_env
@@ -445,187 +444,11 @@ def test_private_log_path_has_owner_only_permissions():
         directory.rmdir()
 
 
-def test_command_payload_bounds_history_and_omits_optional_values():
-    history = [{"role": "user", "content": str(index)} for index in range(20)]
-
-    body = local_prod.command_payload("hello", None, history, None)
-
-    assert "conversationId" not in body
-    assert "home" not in body
-    assert len(body["history"]) == local_prod.MAX_HISTORY_MESSAGES
-    assert body["history"][0]["content"] == str(20 - local_prod.MAX_HISTORY_MESSAGES)
-
-
-def test_command_payload_reuses_request_validation():
-    with pytest.raises(local_prod.CliError, match="Prompt.*invalid"):
-        local_prod.command_payload("x" * 201, None, [], None)
-
-
-def test_send_command_uses_unique_keys_and_does_not_retry(monkeypatch, capsys):
-    requests = []
-
-    def handler(request):
-        requests.append(request)
-        return httpx.Response(
-            200,
-            json={
-                "requestId": "req_test",
-                "conversationId": "conv_test",
-                "status": "not_understood",
-                "intent": "none",
-                "message": "ok",
-            },
-        )
-
-    keys = iter(("a" * 32, "b" * 32))
-    monkeypatch.setattr(local_prod.secrets, "token_hex", lambda _size: next(keys))
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        first, first_key = local_prod.send_command(
-            client, "http://local", "secret-token", "one", None, [], None
-        )
-        _second, second_key = local_prod.send_command(
-            client, "http://local", "secret-token", "two", first["conversationId"], [], None
-        )
-
-    assert len(requests) == 2
-    assert first_key != second_key
-    assert requests[0].headers["idempotency-key"] == first_key
-    assert requests[1].headers["idempotency-key"] == second_key
-    assert requests[0].headers["authorization"] == "Bearer secret-token"
-    assert "secret-token" not in capsys.readouterr().out
-
-
-def test_send_command_can_reuse_explicit_idempotency_key():
-    requests = []
-
-    def handler(request):
-        requests.append(request)
-        return httpx.Response(
-            200,
-            json={
-                "requestId": "req_test",
-                "conversationId": "conv_test",
-                "status": "not_understood",
-                "intent": "none",
-                "message": "ok",
-            },
-        )
-
-    key = "previously-printed-key-0001"
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        _body, returned_key = local_prod.send_command(
-            client, "http://local", "secret-token", "one", None, [], None, key
-        )
-
-    assert returned_key == key
-    assert requests[0].headers["idempotency-key"] == key
-
-
 def test_malformed_bracketed_url_is_safe_cli_error():
     env = PROD_ENV | {"MIJIA_CONSOLE_BASE_URL": "https://[::1"}
 
     with pytest.raises(local_prod.CliError, match="MIJIA_CONSOLE_BASE_URL"):
         local_prod.production_settings(env)
-
-
-def test_send_command_reports_unknown_outcome_without_retry():
-    calls = 0
-
-    def handler(_request):
-        nonlocal calls
-        calls += 1
-        raise httpx.ConnectError("connection lost")
-
-    with (
-        httpx.Client(transport=httpx.MockTransport(handler)) as client,
-        pytest.raises(local_prod.CliError, match="outcome is unknown.*do not retry"),
-    ):
-        local_prod.send_command(client, "http://local", "secret-token", "one", None, [], None)
-    assert calls == 1
-
-
-def test_run_repl_skips_empty_sanitized_assistant_message():
-    prompts = iter(("first", "second"))
-    calls = []
-
-    class Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-    def send(_client, _base_url, _token, text, conversation_id, history, home):
-        calls.append((text, list(history)))
-        return {
-            "requestId": "req_test",
-            "conversationId": conversation_id or "conv_test",
-            "status": "not_understood",
-            "intent": "none",
-            "message": "",
-        }, "key"
-
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr(local_prod, "send_command", send)
-        local_prod.run_repl(
-            "http://local",
-            "secret-token",
-            None,
-            None,
-            input_fn=lambda _prompt: next(prompts, "/quit"),
-            client_factory=lambda **_kwargs: Client(),
-        )
-
-    assert calls == [("first", []), ("second", [])]
-
-
-def test_run_repl_skips_whitespace_only_reply_and_trims_history():
-    prompts = iter(("first", "second"))
-    seen_histories = []
-
-    class Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-    def send(_client, _base_url, _token, text, conversation_id, history, home):
-        seen_histories.append(list(history))
-        return {
-            "requestId": "req_test",
-            "conversationId": "conv_test",
-            "status": "not_understood",
-            "intent": "none",
-            "message": "   ",
-        }, "key"
-
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr(local_prod, "send_command", send)
-        local_prod.run_repl(
-            "http://local",
-            "secret-token",
-            None,
-            None,
-            input_fn=lambda _prompt: next(prompts, "/quit"),
-            client_factory=lambda **_kwargs: Client(),
-        )
-
-    # The whitespace-only reply must not enter history; the second turn stays valid.
-    assert seen_histories == [[], []]
-
-
-def test_send_command_treats_server_error_as_post_dispatch_failure():
-    def handler(_request):
-        return httpx.Response(502, json={"code": "MI_CLOUD_ERROR"})
-
-    with (
-        httpx.Client(transport=httpx.MockTransport(handler)) as client,
-        pytest.raises(
-            local_prod.CliError, match=r"failed after dispatch \(HTTP 502, code: MI_CLOUD_ERROR"
-        ),
-    ):
-        local_prod.send_command(client, "http://local", "secret-token", "one", None, [], None)
 
 
 class FakeProcess:

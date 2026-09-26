@@ -14,8 +14,8 @@ flowchart TD
     Makers --> Store["Makers conversation store"]
 ```
 
-The physical-execution edge now includes per-home exposure, approved low-risk scene
-revisions, and a console-owned durable action ledger. The deployment-wide execution
+The physical-execution edge now includes per-home exposure, individual scene approval or
+a confirmed home-level bypass, revision-bound checks, and a console-owned durable action ledger. The deployment-wide execution
 flag remains disabled until the operational gates in `docs/TODO.md` pass.
 
 | Responsibility | Owner after extraction | Reason |
@@ -72,7 +72,7 @@ Its Cloud Function entry
 Tencent documents for ASGI routing—then registers the shared lifespan and routes. It
 exposes the ASGI application at the external `/api` prefix; EdgeOne removes that prefix
 before dispatch, so FastAPI continues to declare `/healthz` and the canonical
-`/internal/v1/assistant` route. `/internal/v1/turn` remains legacy-only.
+`/internal/v1/assistant` route.
 `src/mijia_agent` remains the canonical source and is copied into the Cloud Functions
 build tree by `npm run build --prefix adapters/edgeone`. EdgeOne's generated runtime
 imports route entries with the Cloud Functions output root on `sys.path`, so the entry
@@ -87,11 +87,10 @@ is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 2026-09-17; this remains a deployment observation, not a source default.
 
 The canonical assistant currently registers only read capabilities; it does not expose
-`activate_scene`. The deprecated command router may recognize legacy scene intents, but
-always rejects them before dispatch. The automation-token tools ingress also rejects
-activation because it does not yet carry a per-request console-issued action scope. Scene
-discovery still filters to approved low-risk revisions, while physical action registration
-and canonical present-intent checks remain pending until the deployed operational gates pass.
+`activate_scene`. The automation-token tools ingress rejects activation because it does not
+yet carry a per-request console-issued action scope. Scene discovery returns enabled scenes
+authorized by individual approval or the confirmed home-level bypass. Physical action
+registration and canonical present-intent checks remain pending until deployed gates pass.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
 environment snapshot from the console tools API only after the model selects the tool.
 The exposure-filtered snapshot is returned as structured `Result.homeStatus` data and
@@ -136,13 +135,9 @@ store need validation. No exactly-once hardware guarantee is claimed.
 - China-first deployment; Makers AI Gateway; env-configured default/override/unlimited user quotas.
 - EdgeOne KV is eventually consistent and supplies soft quotas only; production remains fail-closed.
 - Web assistant first, then Siri/Automation Token using the same authenticated quota path.
-- No user model keys. The console's phase-3 retirement removed its legacy command
-  implementation: `/api/ai/command` returns `410 AI_COMMAND_RETIRED`, and
-  `POST /ai/command` in this repo is the command ingress — a Postman-callable
-  automation-token route sharing the internal turn pipeline's decision core
-  (`src/mijia_agent/command_rules.py`), with every model call logged as JSONL. Console
-  token generation no longer carries BYOK fields; the token is a session+home
-  credential for this ingress.
+- No user model keys. Assistant requests use the authenticated console → Makers → Python
+  path; retired direct command endpoints and router code are removed. Console token
+  generation does not carry BYOK fields.
 - Preview produces mock text without Gateway/device access.
 - Home Assistant stays a future executor adapter.
 - Inferred/unknown device relationships cannot authorize execution; existing domain semantics stay in the console.
