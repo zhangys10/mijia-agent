@@ -3,38 +3,12 @@ import time
 
 import httpx
 
-from .command_rules import (
-    CHAT_TOOLS_ADDENDUM,
-    SYSTEM_PROMPT,
-    chat_tools,
-    user_content,
-)
 from .config import Settings
 from .llm_log import LlmCallLogger
-from .models import AgentError, Decision, Scene, Turn, Usage
+from .models import AgentError, Usage
 
 LOG_EXCERPT_CONTENT = 2000
 LOG_EXCERPT_ARGUMENTS = 500
-
-
-def payload(turn: Turn, scenes: list[Scene], settings: Settings) -> dict:
-    """Chat-pipeline model request: prompt and tool schema from command_rules."""
-    return {
-        "model": settings.model,
-        "temperature": 0,
-        "enable_thinking": False,
-        "max_tokens": settings.max_output_tokens,
-        "tools": chat_tools(scenes, "scene:activate" in turn.scopes),
-        "tool_choice": "auto",
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT + CHAT_TOOLS_ADDENDUM}]
-        + [m.model_dump() for m in turn.history]
-        + [
-            {
-                "role": "user",
-                "content": user_content(turn.message, turn.locale, turn.timezone, scenes),
-            }
-        ],
-    }
 
 
 def parse_usage(body: dict, request: dict, response: str) -> Usage:
@@ -154,53 +128,6 @@ class Gateway:
             }
         )
         return body, usage
-
-    async def decide(self, turn: Turn, scenes: list[Scene]) -> Decision:
-        request = payload(turn, scenes, self.settings)
-        context = {
-            "requestId": turn.requestId,
-            "conversationId": turn.conversationId,
-            "source": "internal_turn",
-        }
-        body, usage = await self.chat(request, context)
-        try:
-            message = body["choices"][0]["message"]
-            calls = message.get("tool_calls", [])
-            if not calls:
-                return Decision(
-                    tool="none", message=str(message.get("content") or "")[:2000], usage=usage
-                )
-            if len(calls) != 1 or calls[0].get("type") != "function":
-                raise ValueError("unsupported calls")
-            call = calls[0]["function"]
-            args = json.loads(call["arguments"])
-            if not isinstance(args, dict):
-                raise TypeError("invalid arguments")
-            if call["name"] == "list_scenes" and not args:
-                return Decision(tool="list_scenes", usage=usage)
-            if call["name"] == "get_home_status" and not args:
-                return Decision(tool="get_home_status", usage=usage)
-            if call["name"] == "get_device_status" and not args:
-                return Decision(tool="get_device_status", usage=usage)
-            if call["name"] == "activate_scene" and {"sceneId"} <= set(args) <= {
-                "sceneId",
-                "replyMessage",
-            }:
-                scene_id = args["sceneId"]
-                reply = args.get("replyMessage")
-                if scene_id not in {s.alias for s in scenes} or not isinstance(
-                    reply if reply is not None else "", str
-                ):
-                    raise ValueError("unknown scene or reply")
-                return Decision(
-                    tool="activate_scene",
-                    sceneId=scene_id,
-                    replyMessage=str(reply or "").strip(),
-                    usage=usage,
-                )
-            raise ValueError("unsupported tool")
-        except (ValueError, TypeError, KeyError, IndexError, AttributeError):
-            raise AgentError("AI_GATEWAY_RESPONSE_INVALID", usage=usage) from None
 
     def _log_failure(self, context: dict, code: str, started: float) -> None:
         self.logger.log(

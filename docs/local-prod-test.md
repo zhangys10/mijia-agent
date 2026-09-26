@@ -131,7 +131,7 @@ Token generation requires the console checkout selected with `--console-repo` be
 sealing uses the console's own libraries. The pulled agent env file supplies
 `AI_AUTOMATION_TOKEN_SECRET`; the console checkout's `.env` supplies
 `XIAOMI_SESSION_SECRET` when it is absent from the pulled file. Both secrets must match
-the deployed console. Generated tokens bind to `APP_ENV=production`, matching production;
+the deployed console. Generated tokens use the same stable production token realm as the deployed console;
 the checkout's local `.env` cannot override the selected token secret.
 
 Automation can skip the typed phrase with the intentionally explicit

@@ -9,7 +9,6 @@
 | `AI_AGENT_BASE_URL` | New adapter's HTTPS origin | No | No |
 | `AI_AGENT_INTERNAL_SECRET` | Sends | Verifies | No |
 | `AI_AUTOMATION_TOKEN_SECRET` | Issues and verifies short-lived Web/Siri automation tokens | No | No |
-| `APP_ENV` | Required; set production to `production` for token AAD | No | No |
 | `AI_AUTOMATION_TOKEN_KEY_ID` | Optional token key version; issuer/verifier values must match | No | No |
 | `MIJIA_CONSOLE_BASE_URL` | No | Uses | Uses |
 | `AI_TOOLS_INTERNAL_SECRET` | Verifies | Sends | Sends |
@@ -17,13 +16,14 @@
 | `AI_PYTHON_INTERNAL_SECRET` | No | Sends | Verifies |
 | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_MODEL` | Retire after cutover | Not needed | Yes |
 | `AI_GATEWAY_ALLOWED_MODELS` | — | — | Optional; defaults to configured model only |
-| `AI_GATEWAY_TIMEOUT_MS` / `AI_GATEWAY_MAX_OUTPUT_TOKENS` | — | — | Legacy-router defaults 5000 / 256 |
+| `AI_GATEWAY_TIMEOUT_MS` | — | — | Optional Gateway request timeout |
 | `AI_ASSISTANT_MAX_OUTPUT_TOKENS` | — | — | Canonical assistant completion limit; defaults 512 |
 | `AI_CAIYUN_BASE_URL`, `AI_CAIYUN_APP_KEY`, `AI_CAIYUN_APP_SECRET` | — | — | Required together to enable Caiyun Weather v2.6’s signed App Key/App Secret mode; no token auth or provider fallback |
 | `AI_AMAP_BASE_URL`, `AI_AMAP_API_KEY`, `AI_AMAP_PRIVATE_KEY` | — | — | Required together with Caiyun to resolve mainland-China city and district names; the private key is used only server-side to generate AMap `sig` |
 | `AI_WEATHER_TIMEOUT_MS`, `AI_WEATHER_CACHE_TTL_SECONDS` | — | — | Defaults 3000 ms and 300 seconds; values are bounded to 100–3000 ms and 60–600 seconds |
-| `AI_SCENE_APPROVED_IDS` | Yes | No | No |
-| `AI_ENVIRONMENT` | Set preview checks | development/preview/production | Required policy; default production |
+| `AI_SCENE_ACTION_LEDGER_STORE` | Console Blob namespace; defaults to `mijia-ai-scene-actions-v1` | No | No |
+| `AI_SCENE_EXECUTION_ENABLED` | Keep unset/`false` until all [Phase 3 executor gates](./TODO.md) pass | No | No |
+| `AI_ENVIRONMENT` | `development`, `preview`, or `production` | `development`, `preview`, or `production` | `development`, `preview`, or `production`; defaults to production |
 
 Use distinct secrets across service boundaries and environments. Python validates the
 Python/tool secrets are at least 32 characters and distinct. Configure the same separation
@@ -37,36 +37,28 @@ proxies and tracing; access logs should not capture bindings or user text.
 
 ## Sequence
 
-For a step-by-step development deployment with per-step verification and rollback records, see
-the [M1 deployment runbook](./m1-deployment-runbook.md).
-
-1. Review/apply `integration/mijia-web-console.patch` against pinned PR #31 head in a clean
-   branch, then apply `integration/mijia-web-console-usage-settlement.patch`; or use the updated
-   companion PR. Keep its activation gate closed.
-2. Run `npm run build --prefix adapters/edgeone` to sync `src/mijia_agent` into
+1. Run `npm run build --prefix adapters/edgeone` to sync `src/mijia_agent` into
    `adapters/edgeone/cloud-functions/api/mijia_agent`.
-3. Set the new Makers project root to `adapters/edgeone`; link the correct development
+2. Set the new Makers project root to `adapters/edgeone`; link the correct development
    project and deploy the Agents plus Cloud Functions configuration. The root must keep
    `edgeone.json`, `agents/`, and `cloud-functions/` together. Configure Python's
    environment variables on `cloud-functions/api`, including Gateway credentials.
-4. Verify Agents capability, routing, `context.store`, cancellation, `/api/healthz`,
+3. Verify Agents capability, routing, `context.store`, cancellation, `/api/healthz`,
    and `/api/internal/v1/assistant` ingress controls.
-5. Test console→adapter→Python→Gateway and Python→console discovery with fake/low-risk data.
-6. Set console `AI_AGENT_BASE_URL` to the new Makers origin. Keep the console's legacy
-   `/api/ai/command` route retired (phase 3: it answers `410 AI_COMMAND_RETIRED`) and old
-   BYOK UI closed. Public Web Chat paths stay unchanged. For the quota-deferred
+4. Test console→adapter→Python→Gateway and Python→console discovery with fake data.
+5. Set console `AI_AGENT_BASE_URL` to the new Makers origin and keep the BYOK UI closed. Public Web Chat paths stay unchanged. For the quota-deferred
    development cutover, also set console `AI_QUOTA_ENABLED=false`: the console synthesizes
    disabled quota summaries and requires no adapter quota surface. Do not claim cost
    protection in this mode.
-7. Complete execution/state/quota gates in TODO.md before any production cutover.
+6. Complete execution/state/quota gates in TODO.md before any production cutover.
 
 ### Canonical token-envelope rollout
 
 Deploy the Web console and Makers adapter changes as one coordinated release. The Web console
 now sends `automationToken`, and the adapter rejects the retiring `sessionBinding` field; a
 partially deployed pair therefore fails closed with `AI_INVALID_REQUEST` rather than using a
-second authorization path. Ensure the console has `AI_AUTOMATION_TOKEN_SECRET` before rollout,
-set console `APP_ENV=production`, and ensure any configured `AI_AUTOMATION_TOKEN_KEY_ID` is the
+second authorization path. Ensure the console has `AI_AUTOMATION_TOKEN_SECRET` before rollout
+and any configured `AI_AUTOMATION_TOKEN_KEY_ID` is the
 same for `/api/ai/chat`, `/api/ai/tools`, and offline token generation. Edge Functions receive
 these values through `context.env`; token issuance and verification must not depend on Node's
 `process.env`. Redeploy the console after changing bindings, then verify a read-only home question
@@ -110,8 +102,7 @@ but no live project deployment or function invocation has been performed.
 
 ## Rollback
 
-Unset `AI_AGENT_BASE_URL` to restore the console's same-project Agent route. Keep the
-old implementation until parity/cutover is complete. Do not serve both writers for the
+Unset `AI_AGENT_BASE_URL` to route the console back to its same-project Agent implementation. Do not serve both writers for the
 same command namespace. If a command is uncertain, inspect its executor receipt before
 retrying on either backend. Quota remains a console-owned policy: disabled mode has no
 ledger to reset; restoring enforcement requires a verified local KV configuration.

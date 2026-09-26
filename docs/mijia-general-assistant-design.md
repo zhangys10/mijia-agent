@@ -69,7 +69,7 @@ Sources:
 
 Home Assistant’s “Prefer handling commands locally” path first attempts the built-in deterministic conversation agent. It uses the LLM only when the local agent does not understand the request. This reduces cost and latency for common commands while preserving general-question capability.
 
-**Adopt selectively:** exact, unambiguous, low-risk commands may use a deterministic fast path, but only through the same policy and action ledger as model-selected actions. The LLM remains the fallback for general questions and ambiguous language.
+**Adopt selectively:** exact, unambiguous commands may use a deterministic fast path, but only through the same policy and action ledger as model-selected actions. The LLM remains the fallback for general questions and ambiguous language.
 
 Source: [Home Assistant Voice Chapter 9](https://www.home-assistant.io/blog/2025/02/13/voice-chapter-9-speech-to-phrase/)
 
@@ -77,7 +77,7 @@ Source: [Home Assistant Voice Chapter 9](https://www.home-assistant.io/blog/2025
 
 Home Assistant converts exposed scripts into callable tools rather than dumping them into a static entity list. Descriptions tell the model what the script does and when to use it.
 
-**Adopt:** treat reviewed Mijia scenes as action tools or discoverable action candidates with clear descriptions and risk metadata. Do not expose a generic Xiaomi API.
+**Adopt:** treat home-authorized Mijia scenes as action tools or discoverable action candidates with clear descriptions and action summaries. Do not expose a generic Xiaomi API.
 
 Source: [Exposing scripts to LLM conversation agents](https://www.home-assistant.io/voice_control/exposing_scripts_to_llms/)
 
@@ -151,6 +151,14 @@ flowchart TD
 ### 4.2 Core rule
 
 The model may **request** a capability. It never authorizes or executes one. Authorization, exposure, argument validation, risk policy, idempotency, and final outcome are server responsibilities.
+
+### 4.3 Platform independence as a design constraint
+
+EdgeOne is the initial deployment platform. The current implementation may use its runtime and services directly to deliver the product; implementing a second platform or a general plugin framework is not a prerequisite. However, EdgeOne is a replaceable implementation choice, not part of the assistant's business contract. This requirement applies to all external dependencies, not only storage.
+
+Keep conversation rules, capability schemas, authorization policy, exposure semantics, action outcomes, and public channel contracts independent of platform SDK types, headers, storage keys, and deployment layouts. Platform integration belongs at explicit boundaries owned by the repository that uses it: `adapters/edgeone` in this repository, and corresponding server-side adapters in `mijia-web-console`. The runtime entrypoint selects implementations and injects normalized configuration and dependencies. The core must not discover its runtime or select a vendor itself.
+
+Existing direct integrations may remain during incremental delivery, but must be recorded as coupling to remove when that boundary is refactored or replaced. New changes must avoid spreading that coupling into additional business modules. Small interfaces around actual operations are sufficient; do not build a generic SDK abstraction or require multiple production backends in advance. Section 16.3 records the required boundaries, current EdgeOne choices, and replacement criteria. These are design requirements, not a claim that every adapter already exists.
 
 ## 5. Request lifecycle
 
@@ -247,7 +255,7 @@ class CapabilityResult:
 |---|---|---|
 | `general_read` | time, weather | Automatic after schema validation |
 | `home_read` | temperature, powered-on devices | Requires authenticated home membership and exposure |
-| `home_write_low` | reviewed scene activation | Requires scope, explicit present intent, durable claim |
+| `home_write_scene` | home-authorized scene activation | Requires scope, explicit present intent, durable claim |
 | `home_write_high` | locks, security, gas | Not registered |
 | `external_write` | messages, purchases | Not registered in initial project |
 
@@ -261,9 +269,9 @@ class CapabilityResult:
 | `get_home_environment` | home read | Temperature, humidity, air quality; exposed sources only |
 | `get_device_status` | home read | Sanitized state projection; no raw IDs |
 | `find_scenes` | home read | Returns matching opaque aliases and descriptions |
-| `activate_scene` | home write low | Accepts only an alias returned by trusted discovery in this turn |
+| `activate_scene` | home scene write | Accepts only an alias returned by trusted discovery in this turn |
 
-`activate_scene` is not exposed when the scope, durable ledger, console execution gate, or approved scene revision is unavailable.
+`activate_scene` is not exposed when the scope, durable ledger, console execution gate, or current scene revision and home authorization are unavailable.
 
 ## 8. General answers and current information
 
@@ -318,7 +326,7 @@ The console should expose a versioned, sanitized projection:
 - room/floor display names and aliases;
 - exposed device display names, kind, room, supported read capabilities;
 - exposed measurement types and source labels;
-- reviewed scene aliases, names, descriptions, revision hashes, and risk class;
+- home-authorized scene aliases, names, descriptions, revision hashes, and action summaries;
 - freshness and completeness metadata.
 
 It must exclude raw device identifiers, MIoT SIID/PIID values, account identifiers, credentials, topology evidence not approved for exposure, and unrestricted action names.
@@ -328,8 +336,8 @@ It must exclude raw device identifiers, MIoT SIID/PIID values, account identifie
 Exposure is configured once per home and shared by every currently authorized member of that home. Authorization is still checked per principal on every request, but members do not maintain divergent exposure lists. Defaults should be conservative:
 
 - read-only environmental measurements may be suggested for exposure;
-- devices and scenes are opt-in;
-- sensitive device categories are never eligible;
+- devices are opt-in; scenes require individual approval or an explicitly confirmed home-level approval bypass;
+- sensitive device categories are ineligible for device-state reads; scene authorization follows the scene controls above;
 - the user can inspect and revoke exposure;
 - changes take effect without redeploying the agent.
 
@@ -338,7 +346,7 @@ For the initial Mijia-only release, `mijia-web-console` owns the complete entity
 - a home-level assistant enable switch;
 - room and environmental-measurement read toggles;
 - device-state read toggles;
-- scene execution toggles with risk, confirmation, and current revision badges;
+- a scene-action master toggle, individual scene approvals, and a confirmed bypass toggle with current revision badges;
 - source, last-sync, last-modified, and “changed since approval” indicators;
 - one action to revoke all assistant access.
 
@@ -364,8 +372,7 @@ All conditions must pass:
 
 - authenticated current home membership;
 - required action scope;
-- scene is exposed, enabled, approved, and revision-matched;
-- scene risk class is permitted;
+- scene is enabled, revision-matched, and exposed by either individual approval or confirmed home-level bypass;
 - request expresses explicit present-tense intent or uses a valid confirmation ticket;
 - alias was discovered through trusted context;
 - durable idempotency claim acquired atomically;
@@ -375,7 +382,7 @@ All conditions must pass:
 
 The existing idempotency key remains the request identity, but a key by itself is not an execution guarantee. The console must persist and atomically claim it across workers, deployments, retries, and conversations.
 
-**Decision:** the authoritative ledger runs in `mijia-web-console` on EdgeOne Blob, not EdgeOne KV. Blob provides strong-consistency reads and conditional create through `setJSON(key, value, {onlyIfNew: true})`. KV may serve quotas or caches, but its other edge nodes can read stale values for up to 60 seconds.
+**Initial implementation decision:** the authoritative ledger runs in `mijia-web-console` on EdgeOne Blob, not EdgeOne KV. Blob provides strong-consistency reads and conditional create through `setJSON(key, value, {onlyIfNew: true})`. KV may serve quotas or caches, but its other edge nodes can read stale values for up to 60 seconds. The portable contract is an atomic durable claim, immutable outcome records, and authoritative replay reads; a replacement must preserve those semantics, not reproduce the Blob API. See §16.3 for migration and validation requirements.
 
 The claim key is a digest of `environment + principal + home + idempotency_key`. The immutable claim contains:
 
@@ -434,6 +441,8 @@ Keep persistence behind a repository-owned `ConversationRepository`; do not coup
 - stop/delete/history endpoints call the same repository, so platform replacement remains possible.
 
 This uses Makers storage rather than introducing an external database while preserving the product's two-projection privacy contract. Cross-instance persistence requires EdgeOne CLI 1.6.26 or later.
+
+`context.store` and direct Blob SDK calls are distinct platform integrations. The former supplies platform-managed conversation persistence; the latter is used by console-owned exposure and action storage. Keep both behind their own domain operations rather than exposing either API to the engine. The conversation contract must define ordering, retention, scoped identity, deletion, and failure behavior so a replacement can preserve them independently of Makers conversation IDs and storage layout (§16.3).
 
 Reference: [EdgeOne Makers conversation management](https://cloud.tencent.com/document/product/1552/132787).
 
@@ -713,8 +722,8 @@ Subsequent work must preserve this sequence:
 1. **Home-read maturity:** add the versioned manifest and filtered read APIs below, plus
    explicit home-level exposure policy. Keep the automation-token envelope; do not revive
    session binding as a second canonical path.
-2. **Action prerequisites:** add reviewed scene aliases, exposure and scene revisions, risk
-   classification, explicit confirmation where required, and a console-owned durable Blob
+2. **Action prerequisites:** add scene aliases, exposure and scene revisions, explicit confirmation where required,
+   and a console-owned durable Blob
    action ledger. The ledger claim must use principal, home, idempotency key, canonical action
    hash, and revision; it must be atomically created before Xiaomi dispatch.
 3. **Action registration:** only after the prerequisites have deployed and concurrency-tested,
@@ -729,10 +738,10 @@ Subsequent work must preserve this sequence:
 | Current tool | Current behavior | Design decision |
 |---|---|---|
 | `authorize` | Validates the request context and returns `{ok: true}` | Retain as an internal health/auth operation, not a model-visible tool |
-| `list_scenes` | Returns enabled manual scenes as principal/home-scoped opaque aliases, names, generic descriptions, and action counts | Reuse aliasing; replace the coarse catalog with exposure, revision, risk, and searchable summaries |
+| `list_scenes` | Returns enabled manual scenes as principal/home-scoped opaque aliases, names, generic descriptions, and action counts | Reuse aliasing; replace the coarse catalog with exposure, revision, and searchable summaries |
 | `get_home_status` | Returns sanitized temperature, humidity, air-quality, pressure, and battery readings with completeness and warnings | Reuse collector; expose to the agent as filtered `get_home_environment` |
 | `get_device_status` | Returns bounded room/device projections with `on`, `off`, or `unknown` and online state | Reuse collector; add assistant exposure and validated room/kind/state filters |
-| `activate_scene` | Validates scope, alias, arguments, and idempotency, then always rejects execution; preview is read-only | Keep disabled until the durable ledger, revision binding, risk policy, and feature gate exist |
+| `activate_scene` | Validates scope, alias, arguments, and idempotency, then always rejects execution; preview is read-only | Keep disabled until the durable ledger, revision binding, authorization policy, and feature gate exist |
 
 The environment collector already has several desirable semantics: it reads public MIoT specifications, selects readable properties, normalizes units, batches property reads, filters offline sources, preserves partial failures, and omits raw Xiaomi identifiers. The device collector uses the same synchronized device-management model as the dashboard, preserves `unknown`, omits raw IDs/spec tuples, and bounds its result size. These should become implementations behind provider-neutral agent capabilities rather than be rewritten from scratch.
 
@@ -742,7 +751,7 @@ The environment collector already has several desirable semantics: it reads publ
 2. **No capability manifest.** The agent must already know a hard-coded list of console operations and schemas.
 3. **No filtered reads.** Both status tools require empty arguments, so a question about one room retrieves the whole bounded home projection.
 4. **Scene aliases are not revision-bound.** Editing a scene does not change its alias, so a previously reviewed action can silently acquire different semantics.
-5. **Scene summaries are too weak for safe selection.** The agent receives a generic description and action count, but no sanitized action summary, risk class, or revision.
+5. **Scene summaries are too weak for safe selection.** The agent receives a generic description and action count, but no sanitized action summary or revision.
 6. **No durable action ledger.** Request validation and an idempotency string do not provide an atomic, cross-process execution claim.
 7. **No physical execution path.** `runManualScene` exists in the console's Xiaomi layer, but the remote assistant route intentionally never calls it.
 8. **Fixed dispatch is not dynamic capability assembly.** It cannot express per-home/per-principal availability without adding policy outside the route.
@@ -768,7 +777,7 @@ Both endpoints resolve the canonical automation-token envelope into one internal
     {"name": "get_home_environment", "available": true, "risk": "home_read"},
     {"name": "get_device_status", "available": true, "risk": "home_read"},
     {"name": "find_scenes", "available": true, "risk": "home_read"},
-    {"name": "activate_scene", "available": false, "risk": "home_write_low"}
+    {"name": "activate_scene", "available": false, "risk": "home_write_scene"}
   ],
   "projection": {
     "rooms": ["客厅"],
@@ -789,7 +798,7 @@ The agent owns the model-facing JSON Schemas and never injects arbitrary remote 
 |---|---|---|
 | `get_home_environment` | optional exposed `rooms` and `metrics` | Sanitized readings, completeness, warnings, and `capturedAt` |
 | `get_device_status` | optional exposed `rooms`, closed-set `kinds`, and `states` | Sanitized bounded devices; `unknown` remains `unknown` |
-| `find_scenes` | bounded text `query` | Exposed opaque aliases, revision, sanitized action summary, and risk |
+| `find_scenes` | bounded text `query` | Exposed opaque aliases, revision, and sanitized action summary |
 | `get_scene_details` | `sceneAlias` | Current exposed revision and enough detail to clarify or confirm safely |
 | `activate_scene` | `sceneAlias`, `expectedRevision`, and policy-issued confirmation proof when required | Terminal action result after atomic claim; never retried blindly |
 
@@ -803,8 +812,8 @@ For a scene, store or derive:
 
 - an opaque alias scoped to principal and home;
 - an `exposureRevision` for the approval configuration;
-- a `sceneRevision` derived from normalized action semantics;
-- a sanitized summary and risk classification;
+- a `sceneRevision` derived from action semantics and target identifiers, excluding display name;
+- a sanitized action summary and per-home approval or confirmed approval bypass;
 - confirmation requirements and whether execution is enabled.
 
 The console owns the final authorization and durable action ledger because it is the only component allowed to execute against Xiaomi. The agent can collect intent and confirmation, but it cannot authorize itself. Immediately before execution, the console re-resolves the alias, checks exposure and both revisions, claims the idempotency key atomically, and invokes `runManualScene` once. Ambiguous transport outcomes become `outcome_unknown`, never an automatic retry.
@@ -847,7 +856,39 @@ Do not infer behavioral compatibility from the provider name or a successful tex
 
 At startup, `AI_GATEWAY_MODEL` must match a validated entry. Changing it is a configuration-only deployment, but production promotion requires rerunning the model contract suite. The engine consumes normalized events and never branches on a vendor name.
 
+The current deployment continues to require the configured Makers AI Gateway. Portability is not permission to add user-supplied keys, direct-provider fallback, or silent failover. A future gateway replacement is an explicit operator-controlled adapter and configuration change with the same credential isolation, model allowlist, usage accounting, and contract validation.
+
 References: [Makers Agent quick start and model selection](https://cloud.tencent.com/document/product/1552/132786) and [Makers Models overview](https://cloud.tencent.com/document/product/1552/132748).
+
+### 16.3 Platform and infrastructure dependencies
+
+The following inventory covers both companion repositories. Boundary names describe target responsibilities; they do not assert that named interfaces have already been implemented. Each integration should document its owner, configuration, required guarantees, normalized errors, and replacement procedure alongside the adapter.
+
+| Dependency | Current EdgeOne integration | Required replaceable boundary and guarantees |
+|---|---|---|
+| HTTP hosting and routing | Console Edge Functions, Makers Agent routes, Python Cloud Functions; file routing and platform path-prefix handling | Ingress adapters translate requests into the canonical assistant/tool contracts. A different HTTP or ASGI host must preserve authentication, body limits, no-store responses, status/error codes, and channel behavior without changing conversation logic. Deployment prefixes and file layout stay outside the core. |
+| Runtime configuration and secrets | Edge/Agent `context.env`, Node `process.env`, Python environment injection, platform bindings and deployment credentials | Entry adapters construct validated configuration and inject it. Shared business modules must not assume a Node global, an Edge context, or an automatically injected binding. Normalize local, test, preview, and production policy explicitly; preserve secret separation and preview's prohibition on model/device access. |
+| Model access | Makers AI Gateway, model identifiers, provider-specific request/stream/usage formats | A model provider normalizes messages, tool calls, stream events, usage, deadlines, and failures. Replacing the gateway preserves the configured model allowlist, bounded loop, credential isolation, and explicit handling of unknown usage; no automatic provider fallback. |
+| Conversation persistence | Makers `context.store` message and state APIs backed by platform Blob | `ConversationRepository` owns display/model projections, scoped conversation identity, ordering, retention, deletion, and replay state. Vendor IDs and schemas are adapter details; deleting a conversation must never delete authoritative action receipts. |
+| Home exposure persistence | Console uses `@edgeone/pages-blob` for per-home consent and exposure records | An exposure repository owns default-deny reads, revisions, audit records, and shared per-home ownership. A replacement preserves authorization and freshness requirements and distinguishes missing records from unavailable storage; it must not accidentally grant access on failure. |
+| Durable action claims | Console Blob conditional creates and strong reads | An action ledger exposes claim, conflict/replay lookup, and outcome recording. Any substitute must prove cross-worker atomic claims and durable authoritative reads, preserve request hashes and immutable receipts, and retain unknown outcomes after crashes/timeouts. Eventually consistent KV and process-local locks cannot satisfy this boundary. |
+| Quota and temporary cache | EdgeOne KV bindings for planned soft quota storage; local/fake stores for development | Quota policy owns reservation, settlement, expiry, and conservative accounting; the store adapter declares its consistency and failure semantics. Cache adapters declare TTL and freshness and cannot become authorization or execution authorities. Replacing infrastructure does not imply deferred quota enforcement is already enabled. |
+| Agent lifecycle and cancellation | Makers conversation headers/IDs, stop/delete routes, active-run cancellation and platform timeouts | A lifecycle adapter maps application conversation IDs and run IDs to platform handles, propagates deadlines/cancellation, and normalizes terminal events. Cancellation never proves a dispatched physical action was undone; replay and outcome rules survive instance changes and platform replacement. |
+| Deployment, service discovery, and observability | `edgeone.json`, CLI/build output, generated Python package copies, platform origins, logs and deployment environments | Keep packaging, route registration, ingress controls, and secret provisioning in deployment adapters/runbooks. Inject service locations; emit application request IDs, normalized errors, latency and usage through a replaceable telemetry boundary. A new host must preserve redaction, trace correlation, timeout budgets, and security controls. |
+
+The same rule applies to non-EdgeOne dependencies: Caiyun/AMap stay behind weather and place-resolution contracts, and Xiaomi access stays behind the console's home capability contract. Product requirements such as explicit action authorization, per-home consent, bounded model access, and sanitized errors remain stable when a service changes.
+
+### 16.4 Replacement and incremental implementation requirements
+
+“Replaceable” means changing adapters, deployment configuration, and an explicit data migration when necessary, without rewriting the conversation engine, capability policy, or Web/Siri contracts. It does not promise a zero-work, zero-downtime, or configuration-only migration for every backend.
+
+1. Record existing direct platform calls and their required semantics before replacing a boundary. Keep current working EdgeOne integrations until the replacement is ready; extract only the interface required by the affected domain operations.
+2. Exercise normalized contracts with local fakes independently of EdgeOne credentials and network access. Separately validate runtime wiring and real backend guarantees, including concurrent claims, persistence across instances, cancellation, and failure behavior. Fake tests cannot certify those operational properties.
+3. Define versioned export/import and identity mapping for conversation history, exposure revisions, audit records, action receipts, and active quota reservations where applicable. Preserve ownership, retention, privacy projections, and unresolved outcomes. Credentials are provisioned separately and never embedded in migration data.
+4. Plan cutover and rollback with one authoritative writer for each action-claim namespace. Reconcile in-flight or uncertain actions before switching executors; never retry a physical write to repair a migration. Rollback must use the same authoritative receipts or a verified reconciliation, so it cannot reopen an already claimed action.
+5. Promote a replacement only after its domain contracts and deployment checks pass. If it cannot provide a required guarantee, keep the affected capability disabled or retain the existing backend; do not silently weaken safety or consistency to fit the new service.
+
+This document update establishes the design constraint and migration criteria only. It does not schedule an immediate platform migration, introduce fallback services, or assert completion of the interface extraction. Future implementation tasks must identify which listed boundaries they touch and record any remaining direct coupling.
 
 ## 17. Security and privacy requirements
 
@@ -915,7 +956,7 @@ Never use “HTTP 200” as evidence that a physical action succeeded.
 - Unexposed devices/scenes cannot be read or acted upon.
 - Real IDs and credentials never enter model requests, responses, logs, memory, or client payloads.
 - Action replay across conversations/workers/restarts executes once.
-- Changed scene revision invalidates approval.
+- Changed scene actions invalidate individual approval; renaming alone does not. Confirmed home-level bypass remains effective for the current revision.
 - Cancellation and timeout after dispatch remain unknown, not failed or retried.
 
 ### 20.3 Provider contracts
@@ -981,11 +1022,22 @@ Run it against every model allowlist change.
 
 ### Phase 3 — Safe scene action
 
-- Extend scene discovery with exposure, normalized action summaries, risk, and revision hashes.
+- Extend scene discovery with exposure, normalized action summaries, and revision hashes.
 - Policy engine.
 - Console-owned EdgeOne Blob action ledger using the existing idempotency key, immutable records, `onlyIfNew`, and strong reads.
-- Revision-bound approval and explicit execution gate.
-- One low-risk real-scene end-to-end validation last.
+- Revision-bound individual approval, a confirmed per-home bypass switch, and an explicit execution gate.
+- One selected real-scene end-to-end validation last.
+
+Implementation progress (2026-09-25): per-home scene-action consent, normalized scene
+summaries, revision-bound individual approval, a confirmed home-level bypass for all
+current and future enabled manual scenes, and the console Blob claim/outcome ledger are
+implemented across the companion repositories. No static low-risk scene classification
+gates discovery or authorization. Approval revisions include private target/action
+material without exposing it in model projections; a display-name change alone does not
+invalidate approval. Physical writes remain unavailable: the deprecated command router
+and direct command ingress have been removed, and the automation-token tools route rejects
+activation without a trusted action scope. Canonical action-scope registration and
+present-intent enforcement remain pending until the deployment gates in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset until then.
 
 **Exit:** exact-once claim semantics, visible unknown outcomes, and no blind retries.
 
@@ -994,7 +1046,7 @@ Run it against every model allowlist change.
 - Quota settlement and channel budgets.
 - Streaming text where supported.
 - Full evaluation harness, dashboards, retention and reconciliation operations.
-- After the completion gates and observation window pass, remove the legacy router modules, routes, schemas, configuration, tests, and deployment wiring.
+- Legacy command router modules, routes, schemas, configuration, tests, and deployment wiring have been removed.
 
 ### Phase 5 — Extensibility and memory
 
@@ -1025,13 +1077,15 @@ Run it against every model allowlist change.
 17. **Per-home exposure.** All authorized members share one home exposure configuration managed in the console.
 18. **Direct Siri ingress.** Siri calls the canonical agent directly with an audience-bound automation token.
 19. **Model by validated configuration.** `AI_GATEWAY_MODEL` selects the model, but only exact models passing the contract suite enter the production allowlist.
-20. **Legacy routers are temporary.** Deprecate and freeze them now; remove them after the canonical assistant passes the completion gates and production observation window.
-21. **Reuse the local CLI shell, not its router contract.** `mijia-agent-local-prod` is the Phase 0 operator harness after it targets the canonical engine; legacy `/ai/command` behavior is available only through an explicit deprecated mode, never fallback.
+20. **Legacy routers are retired.** The direct command endpoints, router modules, schemas, configuration, and tests have been removed; new assistant behavior uses the canonical authenticated path.
+21. **Reuse the local CLI shell, not its router contract.** `mijia-agent-local-prod` uses the canonical assistant path; legacy `/ai/command` behavior has been removed.
+22. **EdgeOne first, replaceable dependencies.** Current delivery may use EdgeOne directly, while all platform dependencies retain explicit adapter boundaries and replacement criteria in §16.3–16.4. Replacing a service must preserve domain contracts and security guarantees without rewriting the assistant core.
 
 ## 23. Resolved implementation decisions
 
 | Topic | Decision |
 |---|---|
+| Platform portability | EdgeOne is the initial implementation; runtime, configuration, models, storage, quota, lifecycle, deployment, and telemetry remain replaceable at the boundaries in §16.3; extraction may be incremental |
 | Weather | AMap resolves China city/area names server-side; Caiyun Weather v2.6 fetches the result and alerts remain explicitly unsupported |
 | Action identity | Retain the existing idempotency key and bind it to the canonical request hash |
 | Action storage | EdgeOne Blob in `mijia-web-console`; atomic claim with `onlyIfNew`, strong reads, and immutable lifecycle records; never authoritative KV |

@@ -794,7 +794,7 @@ def test_unexpected_tool_exception_returns_readable_answer():
 class TerminalWrite:
     name = "activate_scene"
     description = "Test-only terminal action"
-    risk: Literal["home_write_low"] = "home_write_low"
+    risk: Literal["home_write_scene"] = "home_write_scene"
     input_schema: ClassVar[dict] = {
         "type": "object",
         "additionalProperties": False,
@@ -966,12 +966,11 @@ def app_settings(**overrides):
         "console_url": "https://console.example",
         "model": "test-model",
         "allowed_models": ("test-model",),
-        "legacy_router_enabled": False,
     }
     return Settings(**(values | overrides))
 
 
-def test_canonical_http_response_and_legacy_gate():
+def test_canonical_http_response_and_token_isolation():
     provider = ScriptedProvider(
         ModelTurn(
             content="A direct answer.",
@@ -991,8 +990,6 @@ def test_canonical_http_response_and_legacy_gate():
     auth = FakeAuth()
     app = create_app(
         app_settings(),
-        service=object(),
-        command_service=object(),
         assistant_engine=engine,
         assistant_tools=auth,
     )
@@ -1003,7 +1000,6 @@ def test_canonical_http_response_and_legacy_gate():
             headers={"Authorization": "Bearer opaque-token"},
             json={"text": "hello", "channel": "web"},
         )
-        legacy = client.post("/ai/command")
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
@@ -1011,7 +1007,6 @@ def test_canonical_http_response_and_legacy_gate():
     assert body["outcome"] == "direct_answer"
     assert body["answer"]["text"] == "A direct answer."
     assert body["usage"]["totalTokens"] == 5
-    assert legacy.status_code == 410
     assert auth.calls == [("opaque-token", "authorize", None, {})]
     model_payload = json.dumps(
         [message.model_dump() for message in provider.requests[0][0]], ensure_ascii=False
@@ -1028,8 +1023,6 @@ def test_direct_siri_response_has_a_bounded_speech_renderer():
 
     app = create_app(
         app_settings(),
-        service=object(),
-        command_service=object(),
         assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
         assistant_tools=FakeAuth(),
     )
@@ -1053,8 +1046,6 @@ def test_canonical_ingress_authenticates_token_before_model_call():
 
     app = create_app(
         app_settings(),
-        service=object(),
-        command_service=object(),
         assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
         assistant_tools=RejectingAuth(),
     )
@@ -1073,8 +1064,6 @@ def test_internal_canonical_ingress_accepts_only_the_automation_token_envelope()
     provider = ScriptedProvider(ModelTurn(content="A direct answer."))
     app = create_app(
         app_settings(),
-        service=object(),
-        command_service=object(),
         assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
         assistant_tools=object(),
     )
@@ -1146,8 +1135,6 @@ def test_internal_canonical_ingress_preserves_partial_home_data_and_model_answer
 
     app = create_app(
         app_settings(),
-        service=object(),
-        command_service=object(),
         assistant_engine=FakeEngine(),
         assistant_tools=object(),
     )
@@ -1188,8 +1175,6 @@ def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
 
     app = create_app(
         app_settings(),
-        service=object(),
-        command_service=object(),
         assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
         assistant_tools=FakeAuth(),
     )
@@ -1265,7 +1250,7 @@ def test_stream_without_terminal_event_fails_closed():
 
 def test_openai_adapter_requests_redacted_gateway_logging_and_normalizes_usage():
     class FakeGateway:
-        settings = SimpleNamespace(model="validated-model", max_output_tokens=256)
+        settings = SimpleNamespace(model="validated-model", assistant_max_output_tokens=512)
 
         def __init__(self):
             self.call = None
@@ -1290,9 +1275,7 @@ def test_openai_adapter_requests_redacted_gateway_logging_and_normalizes_usage()
 
 def test_openai_adapter_uses_the_assistant_completion_limit():
     class FakeGateway:
-        settings = SimpleNamespace(
-            model="validated-model", max_output_tokens=256, assistant_max_output_tokens=512
-        )
+        settings = SimpleNamespace(model="validated-model", assistant_max_output_tokens=512)
 
         def __init__(self):
             self.request = None
@@ -1336,7 +1319,7 @@ def test_normalizer_accepts_gateway_object_tool_arguments():
 
 def test_openai_adapter_marks_length_limited_response_as_truncated():
     class FakeGateway:
-        settings = SimpleNamespace(model="validated-model", max_output_tokens=256)
+        settings = SimpleNamespace(model="validated-model", assistant_max_output_tokens=512)
 
         async def chat(self, request, log_context, **kwargs):
             usage = SimpleNamespace(
