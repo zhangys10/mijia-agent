@@ -11,3 +11,5 @@ node_modules/
 adapters/edgeone/cloud-functions/api/mijia_agent/
 adapters/edgeone/cloud-functions/api/mijia_assistant/
 .local-prod/
+llm-log
+.claude/

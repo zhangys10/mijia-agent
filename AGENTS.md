@@ -1,6 +1,6 @@
 # Agent development guidelines
 
-Read README.md and docs/{architecture,migration,contracts,TODO,deployment}.md first.
+Read README.md and docs/{architecture,contracts,deployment}.md first.
 Historical documents in docs/source-snapshot are evidence, not the current implementation plan.
 
 - Python owns reasoning and tools orchestration. Keep EdgeOne-specific APIs in adapters/edgeone.
@@ -19,6 +19,7 @@ Historical documents in docs/source-snapshot are evidence, not the current imple
 - Validate Python with pytest and ruff; validate the Makers adapter with its Node tests.
 - For companion changes, follow the web console's own AGENTS.md and quality gates.
 - When changing `docs/mijia-general-assistant-design.md`, update `docs/mijia-general-assistant-design.zh-CN.md` in the same change, and vice versa; keep both versions aligned.
+- Before frontend page, component, style, or interaction work, read and follow the companion's [Frontend design contract](../mijia-web-console/docs/frontend-design-contract.md). It is the canonical constraint for colors, typography, spacing, responsive layouts, room grouping/filtering, data-to-control mappings, and UI acceptance checks. If the companion checkout is unavailable, obtain this document before implementing frontend changes; do not invent a competing style guide.
 - Do not mark mocked integration tests as live EdgeOne, Gateway, KV, or Xiaomi validation.
 
 Do not create commits, push, or deploy unless the user's request authorizes that action.

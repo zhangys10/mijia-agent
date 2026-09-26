@@ -83,7 +83,10 @@ fi
 edgeone_state="${setup_version}:mijia-agent:production"
 if [[ "$(cat "$edgeone_marker" 2>/dev/null || true)" != "$edgeone_state" || ! -f "$env_file" ]]; then
   temp_env="$(mktemp "$edgeone_root/.env.local-prod.XXXXXX")"
-  if ! (cd "$edgeone_root" && edgeone makers env pull --environment production --file "$temp_env" >/dev/null 2>&1); then
+  # Let the CLI's environment picker select the project's actual production
+  # environment slug. Filtering with `--environment production` can miss
+  # projects whose production environment uses a custom slug.
+  if ! (cd "$edgeone_root" && edgeone makers env pull --file "$temp_env"); then
     rm -f "$temp_env"
     echo "Could not pull the production EdgeOne environment; verify the project link and CLI login." >&2
     exit 1
