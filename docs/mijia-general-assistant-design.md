@@ -1034,10 +1034,10 @@ current and future enabled manual scenes, and the console Blob claim/outcome led
 implemented across the companion repositories. No static low-risk scene classification
 gates discovery or authorization. Approval revisions include private target/action
 material without exposing it in model projections; a display-name change alone does not
-invalidate approval. Physical writes remain unavailable through the
-deprecated command router and the automation-token tools route. Canonical action-scope
-registration and present-intent enforcement remain pending until the deployment gates
-in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset until then.
+invalidate approval. Physical writes remain unavailable: the deprecated command router
+and direct command ingress have been removed, and the automation-token tools route rejects
+activation without a trusted action scope. Canonical action-scope registration and
+present-intent enforcement remain pending until the deployment gates in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset until then.
 
 **Exit:** exact-once claim semantics, visible unknown outcomes, and no blind retries.
 
@@ -1046,7 +1046,7 @@ in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset unt
 - Quota settlement and channel budgets.
 - Streaming text where supported.
 - Full evaluation harness, dashboards, retention and reconciliation operations.
-- After the completion gates and observation window pass, remove the legacy router modules, routes, schemas, configuration, tests, and deployment wiring.
+- Legacy command router modules, routes, schemas, configuration, tests, and deployment wiring have been removed.
 
 ### Phase 5 — Extensibility and memory
 
@@ -1077,8 +1077,8 @@ in [`docs/TODO.md`](./TODO.md) pass. Keep `AI_SCENE_EXECUTION_ENABLED` unset unt
 17. **Per-home exposure.** All authorized members share one home exposure configuration managed in the console.
 18. **Direct Siri ingress.** Siri calls the canonical agent directly with an audience-bound automation token.
 19. **Model by validated configuration.** `AI_GATEWAY_MODEL` selects the model, but only exact models passing the contract suite enter the production allowlist.
-20. **Legacy routers are temporary.** Deprecate and freeze them now; remove them after the canonical assistant passes the completion gates and production observation window.
-21. **Reuse the local CLI shell, not its router contract.** `mijia-agent-local-prod` is the Phase 0 operator harness after it targets the canonical engine; legacy `/ai/command` behavior is available only through an explicit deprecated mode, never fallback.
+20. **Legacy routers are retired.** The direct command endpoints, router modules, schemas, configuration, and tests have been removed; new assistant behavior uses the canonical authenticated path.
+21. **Reuse the local CLI shell, not its router contract.** `mijia-agent-local-prod` uses the canonical assistant path; legacy `/ai/command` behavior has been removed.
 22. **EdgeOne first, replaceable dependencies.** Current delivery may use EdgeOne directly, while all platform dependencies retain explicit adapter boundaries and replacement criteria in §16.3–16.4. Replacing a service must preserve domain contracts and security guarantees without rewriting the assistant core.
 
 ## 23. Resolved implementation decisions

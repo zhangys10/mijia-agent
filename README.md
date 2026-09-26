@@ -6,9 +6,8 @@ and future reminder/preference features. Xiaomi protocol code stays in the web c
 
 **Status: Phase 3 safety foundations present; canonical scene-action registration is pending.** The Python core,
 Makers adapter, and companion web-console implementation include per-home scene approval,
-revision-bound risk checks, and a durable console execution ledger. The deprecated command
-router and automation-token tools ingress cannot dispatch scene writes. Canonical action
-registration remains gated on the deployed checks in [docs/TODO.md](docs/TODO.md).
+revision-bound checks, and a durable console execution ledger. Scene writes remain disabled
+until the deployed checks in [docs/TODO.md](docs/TODO.md) pass.
 No live deployment, model invocation, or device control was performed during extraction.
 
 ## Read first
@@ -16,12 +15,6 @@ No live deployment, model invocation, or device control was performed during ext
 1. [Architecture and decisions](docs/architecture.md)
 2. [Service contracts](docs/contracts.md)
 3. [Deployment and rollback](docs/deployment.md)
-4. [Steward report alignment](docs/steward-report-alignment.md)
-5. [Phase 0 implementation and validation](docs/phase-0-implementation.md)
-
-The three original AI design documents are preserved in `docs/source-snapshot/`.
-They describe the TypeScript baseline; the documents above supersede their repo
-ownership and deployment assumptions. Their unchecked tasks remain unchecked here.
 
 ## Local development
 
@@ -47,8 +40,7 @@ uvicorn mijia_agent.app:create_app --factory --host 127.0.0.1 --port 8000 --no-a
 The canonical Python endpoint is `POST /internal/v1/assistant`, authenticated with a
 dedicated server secret. It is not a browser or Siri endpoint. It must only be called by
 the Makers adapter after the web console has authenticated the user and re-derived the
-token-bound principal/home context. The older `/internal/v1/turn` binding route is
-legacy-only and must not receive new assistant behavior.
+token-bound principal/home context.
 `GET /healthz` is a liveness check, not proof that Gateway or console access works.
 
 ### Local agent with production services
@@ -79,9 +71,7 @@ mijia-agent-local-prod run --profile live-read --message '客厅温度是多少�
 ```
 
 The fake profile is local-only and needs no credentials or network. The live-read profile calls
-the canonical `POST /ai/assistant` endpoint and never registers physical-write capabilities. The
-old `/ai/command` router is disabled by default for environment-loaded deployments; temporary
-rollback access requires `AI_LEGACY_ROUTER_ENABLED=true` and emits deprecation traffic telemetry.
+the canonical `POST /ai/assistant` endpoint and never registers physical-write capabilities.
 
 The CLI starts the real ASGI app on loopback and shuts it down on exit. See
 [the live test guide](docs/local-prod-test.md) for cookie/token files, retained logs,
@@ -120,8 +110,7 @@ Python remains unable to access EdgeOne KV.
 | `src/mijia_assistant/` | Capability-neutral conversation engine and provider/tool contracts |
 | `adapters/edgeone/` | Makers runtime, memory/lifecycle adapter, and Python Cloud Function entry |
 | `tests/` | Credential isolation, unsafe intent, tool and HTTP contract tests |
-| `integration/*.patch` | Companion patches against PR #31's pinned head |
-| `docs/` | Current architecture, source audit, contracts, actionable backlog |
+| `docs/` | Current architecture, contracts, operational guides, and actionable backlog |
 
 No license is added: the source repository declares no open-source license.
 Extraction is performed at the repository owner's request; public availability

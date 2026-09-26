@@ -33,7 +33,7 @@ export async function onRequest(context: Context) {
     }
     const pythonSecret = context.env.AI_PYTHON_INTERNAL_SECRET;
     if (!pythonSecret || pythonSecret.length < 32) throw new Error("AI_AGENT_UNAVAILABLE");
-    const url = serviceUrl(context.env.AI_PYTHON_BASE_URL, "/internal/v1/assistant", context.env.AI_ENVIRONMENT === "development");
+    const url = serviceUrl(context.env.AI_PYTHON_BASE_URL, "/internal/v1/assistant", context.env.NODE_ENV === "development");
     const history = (await store.getMessages({ conversationId: scopedId, limit: 12, order: "asc" }))
       .filter(m => m.role === "user" || m.role === "assistant")
       .slice(-12).map(m => ({ role: m.role, content: m.content.slice(0, 2000) }));

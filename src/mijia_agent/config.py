@@ -3,6 +3,15 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 
+def runtime_environment(env) -> str:
+    preview = env.get("AI_PREVIEW_MODE", "false").lower()
+    if preview not in {"true", "false"}:
+        raise ValueError("AI_PREVIEW_MODE must be true or false")
+    if preview == "true":
+        return "preview"
+    return "development" if env.get("NODE_ENV") == "development" else "production"
+
+
 def endpoint(value: str, development: bool = False) -> str:
     url = urlsplit(value)
     local = development and url.scheme == "http" and url.hostname in {"localhost", "127.0.0.1"}
@@ -28,7 +37,6 @@ class Settings:
     model: str
     allowed_models: tuple[str, ...]
     timeout_ms: int = 5000
-    max_output_tokens: int = 256
     assistant_max_output_tokens: int = 512
     caiyun_base_url: str = ""
     caiyun_app_key: str = field(repr=False, default="")
@@ -40,7 +48,6 @@ class Settings:
     weather_cache_ttl_seconds: int = 300
     environment: str = "production"
     llm_log_path: str = field(repr=False, default="")
-    legacy_router_enabled: bool = False
 
     def __post_init__(self):
         if len(self.internal_secret) < 32 or len(self.tools_secret) < 32:
@@ -55,7 +62,6 @@ class Settings:
             raise ValueError("Invalid environment")
         if (
             not 1 <= self.timeout_ms <= 60000
-            or not 1 <= self.max_output_tokens <= 4096
             or not 1 <= self.assistant_max_output_tokens <= 4096
             or not 100 <= self.weather_timeout_ms <= 3000
             or not 60 <= self.weather_cache_ttl_seconds <= 600
@@ -94,7 +100,6 @@ class Settings:
                 if x.strip()
             ),
             timeout_ms=int(env.get("AI_GATEWAY_TIMEOUT_MS", "5000")),
-            max_output_tokens=int(env.get("AI_GATEWAY_MAX_OUTPUT_TOKENS", "256")),
             assistant_max_output_tokens=int(env.get("AI_ASSISTANT_MAX_OUTPUT_TOKENS", "512")),
             caiyun_base_url=env.get("AI_CAIYUN_BASE_URL", ""),
             caiyun_app_key=env.get("AI_CAIYUN_APP_KEY", ""),
@@ -104,8 +109,6 @@ class Settings:
             amap_private_key=env.get("AI_AMAP_PRIVATE_KEY", ""),
             weather_timeout_ms=int(env.get("AI_WEATHER_TIMEOUT_MS", "3000")),
             weather_cache_ttl_seconds=int(env.get("AI_WEATHER_CACHE_TTL_SECONDS", "300")),
-            environment=env.get("AI_ENVIRONMENT", "production"),
+            environment=runtime_environment(env),
             llm_log_path=env.get("AI_LLM_LOG_PATH", ""),
-            legacy_router_enabled=env.get("AI_LEGACY_ROUTER_ENABLED", "false").lower()
-            in {"1", "true", "yes"},
         )

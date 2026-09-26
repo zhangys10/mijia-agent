@@ -1,6 +1,6 @@
 from typing import ClassVar, Literal
 
-from mijia_agent.command_console import ConsoleAgentTools
+from mijia_agent.console_tools import ConsoleAgentTools
 from mijia_agent.models import AgentError, HomeCapabilities
 from mijia_assistant.models import AssistantContext, AssistantError, CapabilityResult
 

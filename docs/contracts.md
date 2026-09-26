@@ -19,8 +19,7 @@ route — that remains a future M3 adapter contract.
 The canonical endpoint is `POST /api/internal/v1/assistant` externally,
 with `Authorization: Bearer <AI_PYTHON_INTERNAL_SECRET>`.
 EdgeOne strips `/api` before invoking the FastAPI route, which remains
-`POST /internal/v1/assistant`. The older `/internal/v1/turn` binding contract is
-legacy-only and must not receive new assistant capabilities.
+`POST /internal/v1/assistant`.
 Maximum raw body: 64 KiB. Requests and nested history messages reject unknown fields.
 
 ```json
@@ -74,7 +73,7 @@ token only after a home capability is selected.
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Rejected by the canonical automation-token ingress until it receives a per-request console-issued action scope. The deprecated command router also rejects before dispatch. Do not enable physical writes until all operational gates pass. |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Not registered by the canonical assistant. Do not enable physical writes until all operational gates pass. |
 
 Scene discovery returns a content revision hash and normalized action summaries. The
 console exposes enabled manual scenes through individual approval or a confirmed
@@ -217,49 +216,7 @@ principal/home/binding envelope, and `conversation_id` equal to the current plat
 conversation. Cancellation aborts the HTTP call; it cannot undo an already dispatched
 device action. No successful physical cancellation is implied.
 
-## Postman/Siri → Python (`POST /ai/command`, Phase 1)
-
-New direct ingress replacing the console's `/api/ai/command` for external clients.
-`Authorization: Bearer <console-issued automation token>` (`v1.…`, ≤ 8192 chars).
-The token is opaque to Python: the console decrypts it in `/api/ai/tools`, re-derives
-the principal, and resolves the home. Python never opens it, logs it, or uses its BYOK
-provider fields. Optional `Idempotency-Key` header (16–128 chars) becomes mandatory
-once an action is selected; replay returns the completed response, same-key/different-body
-conflicts return 409, concurrent duplicates return 202 processing (process-local store,
-same soft boundary the console had — not durable).
-
-```json
-{ "text": "我回家了", "home": "我的家", "locale": "zh-CN", "timezone": "Asia/Shanghai",
-  "conversationId": "conv_example", "history": [
-    { "role": "user", "content": "…" },
-    { "role": "assistant", "content": "…" }
-  ] }
-```
-
-`home` accepts a home ID, exact name, or substring; omitted means the token-bound home,
-then the account's first home. `history` is at most 32 messages; each is trimmed to 300
-chars. The current route can return a non-action `AiCommandResponse`, for example:
-
-```json
-{ "requestId": "req_…", "conversationId": "conv_…", "conversationReset": false,
-  "turnIndex": 1, "status": "not_understood", "intent": "none",
-  "message": "请告诉我具体的场景名称。", "decisionSource": "llm", "llmOutput": "…" }
-```
-
-Executor status always wins over model text. Public error codes: `LLM_TIMEOUT` (504),
-`LLM_PROVIDER_ERROR` (502), `MI_CLOUD_ERROR` (502), `DEVICE_TIMEOUT` (504),
-`AUTOMATION_TOKEN_EXPIRED`/`AUTOMATION_TOKEN_INVALID` (401), `AI_HOME_NOT_FOUND` (404),
-`IDEMPOTENCY_CONFLICT` (409), `INVALID_REQUEST` (400), `UNAUTHORIZED` (401), and
-`AI_SCENE_EXECUTION_DISABLED` (403) — activation remains closed until the deployed
-executor gates in `docs/TODO.md` pass. `GET /ai/command` returns an info summary. Every model call is
-logged as JSONL (`AI_LLM_LOG_PATH`, stdout by default): request payload, bounded
-response excerpt, usage, latency, `llm_call_failed` on error — no tokens, bindings,
-gateway keys, or principal IDs ever appear.
-
-The console `/api/ai/tools` accepts the token via the `X-Ai-User-Token` header
-after the service bearer. Body uses `home` (name or ID) on direct automation calls;
-the web adapter uses the token-bound home. The Python tool list for the canonical pipeline
-matches the console contract: `list_scenes`, `get_home_status` and `get_device_status`
-(read-only), `activate_scene` (disabled). After the console's phase-3 retirement, its legacy `/api/ai/command` route
-returns `410 AI_COMMAND_RETIRED` and this repo's `POST /ai/command` is the only command
-ingress; whether the console grows a thin Siri pass-through is a cutover decision.
+The retired direct `/ai/command` ingress and its command-router contract have been removed.
+Assistant requests must use the authenticated console → Makers → Python flow documented
+above. Siri/automation entrypoints must go through the console's authenticated public
+contract; Python is not a public endpoint.

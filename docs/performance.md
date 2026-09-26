@@ -150,7 +150,6 @@ Representative files:
 - `adapters/edgeone/agents/ai-home/shared.ts`
 - `adapters/edgeone/tests/adapter.test.mjs`
 - `src/mijia_agent/service.py`
-- `tests/test_agent.py`
 
 ## 4. Shrink and benchmark the LLM fallback separately
 
@@ -167,7 +166,7 @@ attributable and correctness regressions are visible.
 - Bound history more tightly for the fallback path (shorter per-message content and/or fewer
   turns) only after testing multi-turn references. Exact deterministic commands need no model
   history.
-- Record completion-token p99 before reducing `AI_GATEWAY_MAX_OUTPUT_TOKENS`; test
+- Record completion-token p99 before reducing `AI_ASSISTANT_MAX_OUTPUT_TOKENS`; test
   128/160/192 versus the current 256 rather than choosing blindly.
 - Replay the same sanitized fixtures through approved Gateway models/configurations and
   compare decision accuracy, tool validity, p50/p95 Gateway latency, timeout rate, and token
@@ -183,10 +182,8 @@ tests use a fake Gateway.
 
 Representative files:
 
-- `src/mijia_agent/command_rules.py`
 - `src/mijia_agent/gateway.py`
 - `src/mijia_agent/config.py`
-- `tests/test_agent.py`
 
 ## 5. Optimize `get_home_status` as its own read pipeline
 

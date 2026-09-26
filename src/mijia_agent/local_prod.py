@@ -39,14 +39,9 @@ from mijia_assistant.models import (
     ToolCall,
 )
 
-from .command_models import (
-    MAX_AUTOMATION_TOKEN,
-    CommandRequest,
-    CommandResponse,
-    ProcessingResponse,
-)
-from .command_rules import DEFAULT_MAX_CONVERSATION_TURNS
 from .config import Settings
+
+MAX_AUTOMATION_TOKEN = 8192
 
 ACKNOWLEDGEMENT = "USE PRODUCTION SERVICES"
 DEFAULT_ENV_FILE = Path("adapters/edgeone/.env")
@@ -55,7 +50,6 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 READINESS_TIMEOUT_SECONDS = 15.0
 REQUEST_TIMEOUT_SECONDS = 65.0
-MAX_HISTORY_MESSAGES = DEFAULT_MAX_CONVERSATION_TURNS * 2
 AGENT_ENV_NAMES = {
     "AI_PYTHON_INTERNAL_SECRET",
     "AI_TOOLS_INTERNAL_SECRET",
@@ -65,7 +59,6 @@ AGENT_ENV_NAMES = {
     "AI_GATEWAY_MODEL",
     "AI_GATEWAY_ALLOWED_MODELS",
     "AI_GATEWAY_TIMEOUT_MS",
-    "AI_GATEWAY_MAX_OUTPUT_TOKENS",
     "AI_ASSISTANT_MAX_OUTPUT_TOKENS",
     "AI_CAIYUN_BASE_URL",
     "AI_CAIYUN_APP_KEY",
@@ -75,7 +68,7 @@ AGENT_ENV_NAMES = {
     "AI_AMAP_PRIVATE_KEY",
     "AI_WEATHER_TIMEOUT_MS",
     "AI_WEATHER_CACHE_TTL_SECONDS",
-    "AI_ENVIRONMENT",
+    "AI_PREVIEW_MODE",
     "AI_LLM_LOG_PATH",
 }
 CHILD_BASE_ENV_NAMES = {
@@ -146,7 +139,7 @@ def build_environment(path: Path, inherited: Mapping[str, str] | None = None) ->
     child = {key: value for key, value in base.items() if key in CHILD_BASE_ENV_NAMES}
     loaded = parse_env_file(path)
     child.update({key: value for key, value in loaded.items() if key in AGENT_ENV_NAMES})
-    child["AI_ENVIRONMENT"] = "production"
+    child["AI_PREVIEW_MODE"] = "false"
     model = child.get("AI_GATEWAY_MODEL", "").strip()
     if model and "AI_GATEWAY_ALLOWED_MODELS" in loaded:
         allowed = {
@@ -321,9 +314,6 @@ def generate_token(
                 env={
                     "PATH": os.environ.get("PATH", os.defpath),
                     "HOME": os.environ.get("HOME", ""),
-                    # Token AES-GCM AAD binds APP_ENV. Match the production
-                    # verifier even if the console checkout's .env says development.
-                    "APP_ENV": "production",
                     "NODE_ENV": "production",
                 },
                 cwd=str(console_repo),
@@ -444,70 +434,6 @@ def start_agent(env: Mapping[str, str], host: str, port: int) -> subprocess.Pope
         return subprocess.Popen(command, cwd=package_root, env=child_env, stdin=subprocess.DEVNULL)
     except OSError as error:
         raise CliError("Could not start the local agent") from error
-
-
-def command_payload(
-    text: str, conversation_id: str | None, history: list[dict[str, str]], home: str | None
-) -> dict:
-    try:
-        request = CommandRequest.model_validate(
-            {
-                "text": text,
-                "conversationId": conversation_id,
-                "history": history[-MAX_HISTORY_MESSAGES:],
-                "home": home,
-            }
-        )
-    except ValueError as error:
-        raise CliError("Prompt, home, or conversation history is invalid") from error
-    return request.model_dump(exclude_none=True)
-
-
-def send_command(
-    client: httpx.Client,
-    base_url: str,
-    token: str,
-    text: str,
-    conversation_id: str | None,
-    history: list[dict[str, str]],
-    home: str | None,
-    idempotency_key: str | None = None,
-) -> tuple[dict, str]:
-    key = idempotency_key or "local-prod-" + secrets.token_hex(16)
-    print(f"Idempotency-Key: {key}")
-    try:
-        response = client.post(
-            base_url + "/ai/command",
-            headers={"Authorization": "Bearer " + token, "Idempotency-Key": key},
-            json=command_payload(text, conversation_id, history, home),
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-    except httpx.HTTPError as error:
-        raise CliError(
-            f"Request outcome is unknown (Idempotency-Key: {key}); do not retry blindly"
-        ) from error
-    try:
-        body = response.json()
-    except ValueError as error:
-        raise CliError(
-            f"Agent returned an invalid response (HTTP {response.status_code})"
-        ) from error
-    if not isinstance(body, dict):
-        raise CliError(f"Agent returned an invalid response (HTTP {response.status_code})")
-    if response.status_code == 202:
-        raise CliError(
-            f"Request is still processing (Idempotency-Key: {key}); the result is unknown"
-        )
-    if response.status_code >= 500:
-        code = body.get("code")
-        detail = f", code: {code}" if isinstance(code, str) and code else ""
-        raise CliError(
-            f"Agent failed after dispatch (HTTP {response.status_code}{detail}, "
-            f"Idempotency-Key: {key}); the result is unknown"
-        )
-    if response.status_code >= 400 and not isinstance(body.get("code"), str):
-        raise CliError(f"Agent returned an invalid error (HTTP {response.status_code})")
-    return body, key
 
 
 def assistant_payload(
@@ -763,74 +689,6 @@ def run_fake_smoke() -> None:
     if rejected != expected_rejections:
         raise CliError("Fake smoke policy cases did not fail closed")
     print("fake smoke: passed (local only; no credentials, network, or physical writes)")
-
-
-def print_response(body: dict) -> None:
-    if body.get("code"):
-        print(f"error: {body['code']}")
-        if body["code"] == "AI_SCENE_EXECUTION_DISABLED":
-            print("Production physical execution remains disabled by the current M2 gate.")
-        return
-    try:
-        response = CommandResponse.model_validate(body)
-    except ValueError:
-        try:
-            processing = ProcessingResponse.model_validate(body)
-        except ValueError as error:
-            raise CliError("Agent returned an invalid command response") from error
-        print(f"status: {processing.status}")
-        print(f"message: {processing.message}")
-        return
-    rendered = response.model_dump(exclude_none=True)
-    for key in ("status", "intent", "sceneName", "message", "execution", "decisionSource"):
-        value = rendered.get(key)
-        if value is not None:
-            value = json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value
-            print(f"{key}: {value}")
-
-
-def run_repl(
-    base_url: str,
-    token: str,
-    one_shot: str | None,
-    home: str | None,
-    input_fn=input,
-    client_factory=httpx.Client,
-) -> None:
-    conversation_id: str | None = None
-    history: list[dict[str, str]] = []
-    with client_factory(follow_redirects=False, trust_env=False) as client:
-        while True:
-            if one_shot is not None:
-                text = one_shot.strip()
-            else:
-                try:
-                    text = input_fn("mijia> ").strip()
-                except EOFError:
-                    break
-            if not text or text in {"/quit", "/exit"}:
-                break
-            body, _key = send_command(client, base_url, token, text, conversation_id, history, home)
-            print_response(body)
-            if isinstance(body.get("conversationId"), str):
-                conversation_id = body["conversationId"]
-            if body.get("conversationReset") is True:
-                history.clear()
-                print("conversation: reset by server")
-            reply = body.get("message")
-            # History entries must be non-empty after strip (server contract
-            # trims to 300 chars); a whitespace-only sanitized reply would
-            # poison the next turn's validation.
-            if isinstance(reply, str) and reply.strip() and not body.get("code"):
-                history.extend(
-                    [
-                        {"role": "user", "content": text.strip()[:300]},
-                        {"role": "assistant", "content": reply.strip()[:300]},
-                    ]
-                )
-                history = history[-MAX_HISTORY_MESSAGES:]
-            if one_shot is not None:
-                break
 
 
 def retain_log(source: Path, destination: Path) -> None:

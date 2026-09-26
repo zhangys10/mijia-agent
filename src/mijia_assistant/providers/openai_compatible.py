@@ -112,11 +112,7 @@ class OpenAICompatibleProvider:
             "model": self.gateway.settings.model,
             "temperature": 0,
             "enable_thinking": False,
-            "max_tokens": getattr(
-                self.gateway.settings,
-                "assistant_max_output_tokens",
-                self.gateway.settings.max_output_tokens,
-            ),
+            "max_tokens": self.gateway.settings.assistant_max_output_tokens,
             "tool_choice": "auto",
             "tools": tools,
             "messages": [self._message(message) for message in messages],
