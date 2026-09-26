@@ -55,11 +55,13 @@ The fake smoke check is local-only:
 mijia-agent-local-prod smoke --profile fake
 ```
 
-The first acknowledged `mijia-agent-local-prod run --profile live-read` runs
-[`scripts/local-prod-setup.sh`](scripts/local-prod-setup.sh) when setup is missing. It prepares
-`.venv`, builds the adapter, links the `mijia-agent` Makers project, and pulls the production
-environment into the ignored `adapters/edgeone/.env`. After setup, `check` validates the config
-and prints a redacted target. `check` and fake smoke do not run setup.
+Run [`scripts/local-prod-setup.sh`](scripts/local-prod-setup.sh) manually before the first
+`mijia-agent-local-prod run --profile live-read`, and whenever its prerequisites become stale.
+It prepares `.venv`, builds the adapter, links the `mijia-agent` Makers project, and pulls the
+selected production environment into the ignored `adapters/edgeone/.env`. The CLI neither
+checks setup readiness nor runs the setup script; invoke it from the Python environment you
+prepared. Running the setup script again pulls the environment and replaces `.env`. `check`
+validates the config and prints a redacted target. `check` and fake smoke do not run setup.
 
 Then run an interactive session — the CLI generates the automation token from your pasted
 `xiaomi_session` cookie (hidden prompt) via the console repo's offline generator, or type

@@ -12,9 +12,12 @@ The workflow does not add an execution bypass. Action-like model output is rejec
 ## Prerequisites
 
 - Python 3.11+, Node.js/npm, and the EdgeOne CLI logged into the account that owns `mijia-agent`.
-- The first acknowledged `run --profile live-read` bootstraps the Python environment, builds
-  the adapter, links the `mijia-agent` Makers project, and pulls its production environment
-  into the ignored `adapters/edgeone/.env`. It reuses those setup results on later runs.
+- Before running `run --profile live-read`, manually run
+  `bash scripts/local-prod-setup.sh`. It prepares the Python environment, builds the adapter,
+  links the `mijia-agent` Makers project, and pulls the selected production environment into
+  the ignored `adapters/edgeone/.env`. Run it again when setup becomes stale or to refresh `.env`.
+  The CLI performs no setup-readiness check and never invokes the setup script; run it from the
+  Python environment you prepared.
 - A sealed `xiaomi_session` cookie copied from the logged-in production console
   (DevTools → Application → Cookies). The CLI turns it into an automation token by
   delegating to the console repo's offline generator — the Python process never
@@ -38,9 +41,9 @@ mijia-agent-local-prod check
 `check` parses the env file without shell evaluation, validates it with the same `Settings`
 used by the app, and displays only the environment, hostnames, model, and loopback address.
 It performs no Gateway, console, or agent request.
-On a fresh checkout, the first acknowledged `run --profile live-read` performs setup and
-configuration validation before it asks for a token or sends a model request. Run `check`
-after that setup to repeat the local validation without network calls.
+On a fresh checkout, manually run `bash scripts/local-prod-setup.sh` first. The acknowledged
+`run --profile live-read` then validates configuration before it asks for a token or sends a
+model request. Run `check` to validate the local configuration without network calls.
 
 A common stale pull contains:
 

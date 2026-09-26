@@ -44,7 +44,8 @@ from .config import Settings
 MAX_AUTOMATION_TOKEN = 8192
 
 ACKNOWLEDGEMENT = "USE PRODUCTION SERVICES"
-DEFAULT_ENV_FILE = Path("adapters/edgeone/.env")
+EDGEONE_DIR = Path("adapters/edgeone")
+DEFAULT_ENV_FILE = EDGEONE_DIR / ".env"
 CONSOLE_TOKEN_SCRIPT = Path("scripts") / "generate-automation-token.ts"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -783,46 +784,8 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def prepare_local_prod(argv: list[str], env_file: Path | None = None) -> None:
-    """Bootstrap first-run local dependencies, then continue inside the repo venv."""
-    repo_root = Path(__file__).resolve().parents[2]
-    setup_script = repo_root / "scripts" / "local-prod-setup.sh"
-    if not setup_script.is_file():
-        raise CliError("Local setup script is missing from this repository checkout")
-    completed = subprocess.run(["bash", str(setup_script)], cwd=repo_root, check=False)
-    if completed.returncode:
-        raise CliError("Local setup did not complete; see the setup error above")
-
-    interpreter = repo_root / ".venv" / "bin" / "python"
-    if not interpreter.is_file():
-        raise CliError("Local setup did not create the Python environment")
-    if Path(sys.prefix).resolve() != interpreter.parent.parent.resolve():
-        resumed_args = list(argv)
-        if env_file is not None:
-            normalized_args: list[str] = []
-            skip_env_file_value = False
-            for argument in resumed_args:
-                if skip_env_file_value:
-                    skip_env_file_value = False
-                    continue
-                if argument == "--env-file":
-                    skip_env_file_value = True
-                    continue
-                if argument.startswith("--env-file="):
-                    continue
-                normalized_args.append(argument)
-            resumed_args = [*normalized_args, "--env-file", str(env_file)]
-        if "--i-understand-this-uses-production" not in resumed_args:
-            resumed_args.append("--i-understand-this-uses-production")
-        os.execv(
-            str(interpreter),
-            [str(interpreter), "-m", "mijia_agent.local_prod", *resumed_args],
-        )
-
-
 def main(argv: list[str] | None = None) -> int:
-    original_argv = list(sys.argv[1:] if argv is None else argv)
-    args = create_parser().parse_args(original_argv)
+    args = create_parser().parse_args(argv)
     try:
         if not 1 <= args.port <= 65535:
             raise CliError("Port must be between 1 and 65535")
@@ -849,7 +812,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.env_file = repo_root / DEFAULT_ENV_FILE
             elif not args.env_file.is_absolute():
                 args.env_file = args.env_file.resolve()
-            prepare_local_prod(original_argv, args.env_file)
         env = build_environment(args.env_file)
         settings = production_settings(env)
         print(target_summary(settings, args.host, args.port))
