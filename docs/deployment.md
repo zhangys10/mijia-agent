@@ -23,8 +23,7 @@
 | `AI_WEATHER_TIMEOUT_MS`, `AI_WEATHER_CACHE_TTL_SECONDS` | — | — | Defaults 3000 ms and 300 seconds; values are bounded to 100–3000 ms and 60–600 seconds |
 | `AI_SCENE_ACTION_LEDGER_STORE` | Console Blob namespace; defaults to `mijia-ai-scene-actions-v1` | No | No |
 | `AI_SCENE_EXECUTION_ENABLED` | Keep unset/`false` until all [Phase 3 executor gates](./TODO.md) pass | No | No |
-| `AI_PREVIEW_MODE` | Enables mock preview behavior | Enables mock preview behavior | Enables mock preview behavior; defaults false |
-| `NODE_ENV` | Runtime mode | Runtime mode | Runtime mode; controls development-only errors |
+| `AI_ENVIRONMENT` | `development`, `preview`, or `production` | `development`, `preview`, or `production` | `development`, `preview`, or `production`; defaults to production |
 
 Use distinct secrets across service boundaries and environments. Python validates the
 Python/tool secrets are at least 32 characters and distinct. Configure the same separation

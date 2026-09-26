@@ -4,8 +4,8 @@ import { onRequest as onDelete } from "../agents/ai-home/delete.ts";
 
 const host = "127.0.0.1";
 const port = Number(process.env.LOCAL_AGENT_PORT ?? "8789");
-if (process.env.NODE_ENV !== "development") {
-  throw new Error("LOCAL_AGENT_SERVER requires NODE_ENV=development");
+if (process.env.AI_ENVIRONMENT !== "development") {
+  throw new Error("LOCAL_AGENT_SERVER requires AI_ENVIRONMENT=development");
 }
 for (const name of [
   "AI_AGENT_INTERNAL_SECRET",

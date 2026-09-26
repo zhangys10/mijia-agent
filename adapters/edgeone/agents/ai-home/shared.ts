@@ -60,7 +60,7 @@ export async function authorize(context: Context) {
   // The console alone opens the opaque automation token.  This is deliberately
   // the same envelope used by the local production harness, not a parallel
   // session-binding path.
-  const verified = await fetch(serviceUrl(context.env.MIJIA_CONSOLE_BASE_URL, "/api/ai/tools", context.env.NODE_ENV === "development"), {
+  const verified = await fetch(serviceUrl(context.env.MIJIA_CONSOLE_BASE_URL, "/api/ai/tools", context.env.AI_ENVIRONMENT === "development"), {
     method: "POST", redirect: "error", signal: AbortSignal.timeout(15000),
     headers: { Authorization: `Bearer ${toolSecret}`, "Content-Type": "application/json", "X-Ai-User-Token": automationToken },
     body: JSON.stringify({ requestId, tool: "authorize", arguments: {} }),

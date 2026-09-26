@@ -64,7 +64,7 @@ def test_build_environment_isolated_and_policy_preserving(tmp_path):
     write_env(path, PROD_ENV | {"XIAOMI_SESSION_SECRET": "must-not-reach-python"})
     inherited = {
         "PATH": "/bin",
-        "AI_PREVIEW_MODE": "true",
+        "AI_ENVIRONMENT": "preview",
         "UNCHANGED": "yes",
         "AI_AUTOMATION_TOKEN_SECRET": "must-not-reach-python",
         "HTTPS_PROXY": "http://proxy.example:8080",
@@ -77,7 +77,7 @@ def test_build_environment_isolated_and_policy_preserving(tmp_path):
     assert "XIAOMI_SESSION_SECRET" not in child
     assert "AI_AUTOMATION_TOKEN_SECRET" not in child
     assert "HTTPS_PROXY" not in child
-    assert child["AI_PREVIEW_MODE"] == "false"
+    assert child["AI_ENVIRONMENT"] == "production"
     assert child["AI_GATEWAY_ALLOWED_MODELS"] == PROD_ENV["AI_GATEWAY_ALLOWED_MODELS"]
     assert "AI_GATEWAY_API_KEY" not in inherited
     original = path.read_text(encoding="utf-8")
@@ -95,7 +95,7 @@ def test_build_environment_rejects_stale_model_allowlist(tmp_path):
 
 def test_production_settings_rejects_loopback_target_without_exposing_secret():
     env = PROD_ENV | {
-        "AI_PREVIEW_MODE": "false",
+        "AI_ENVIRONMENT": "production",
         "AI_GATEWAY_ALLOWED_MODELS": PROD_ENV["AI_GATEWAY_MODEL"],
         "MIJIA_CONSOLE_BASE_URL": "http://localhost:5173",
     }
@@ -110,7 +110,7 @@ def test_production_settings_rejects_loopback_target_without_exposing_secret():
 @pytest.mark.parametrize("host", ["127.1", "0.0.0.0", "localhost.", "[::ffff:127.0.0.1]"])
 def test_production_settings_rejects_other_explicit_local_hosts(host):
     env = PROD_ENV | {
-        "AI_PREVIEW_MODE": "false",
+        "AI_ENVIRONMENT": "production",
         "AI_GATEWAY_ALLOWED_MODELS": PROD_ENV["AI_GATEWAY_MODEL"],
         "MIJIA_CONSOLE_BASE_URL": f"https://{host}",
     }
@@ -122,7 +122,7 @@ def test_production_settings_rejects_other_explicit_local_hosts(host):
 def test_invalid_settings_error_does_not_echo_values():
     secret_value = "secret-invalid-model-value"
     env = PROD_ENV | {
-        "AI_PREVIEW_MODE": "false",
+        "AI_ENVIRONMENT": "production",
         "AI_GATEWAY_MODEL": secret_value,
         "AI_GATEWAY_ALLOWED_MODELS": "other-model",
     }
@@ -135,7 +135,7 @@ def test_invalid_settings_error_does_not_echo_values():
 
 def test_target_summary_contains_only_non_secret_targets():
     env = PROD_ENV | {
-        "AI_PREVIEW_MODE": "false",
+        "AI_ENVIRONMENT": "production",
         "AI_GATEWAY_ALLOWED_MODELS": PROD_ENV["AI_GATEWAY_MODEL"],
     }
     settings = local_prod.production_settings(env)

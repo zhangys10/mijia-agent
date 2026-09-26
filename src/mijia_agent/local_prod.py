@@ -68,7 +68,7 @@ AGENT_ENV_NAMES = {
     "AI_AMAP_PRIVATE_KEY",
     "AI_WEATHER_TIMEOUT_MS",
     "AI_WEATHER_CACHE_TTL_SECONDS",
-    "AI_PREVIEW_MODE",
+    "AI_ENVIRONMENT",
     "AI_LLM_LOG_PATH",
 }
 CHILD_BASE_ENV_NAMES = {
@@ -139,7 +139,7 @@ def build_environment(path: Path, inherited: Mapping[str, str] | None = None) ->
     child = {key: value for key, value in base.items() if key in CHILD_BASE_ENV_NAMES}
     loaded = parse_env_file(path)
     child.update({key: value for key, value in loaded.items() if key in AGENT_ENV_NAMES})
-    child["AI_PREVIEW_MODE"] = "false"
+    child["AI_ENVIRONMENT"] = "production"
     model = child.get("AI_GATEWAY_MODEL", "").strip()
     if model and "AI_GATEWAY_ALLOWED_MODELS" in loaded:
         allowed = {

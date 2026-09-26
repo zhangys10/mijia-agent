@@ -4,12 +4,10 @@ from urllib.parse import urlsplit
 
 
 def runtime_environment(env) -> str:
-    preview = env.get("AI_PREVIEW_MODE", "false").lower()
-    if preview not in {"true", "false"}:
-        raise ValueError("AI_PREVIEW_MODE must be true or false")
-    if preview == "true":
-        return "preview"
-    return "development" if env.get("NODE_ENV") == "development" else "production"
+    environment = env.get("AI_ENVIRONMENT", "production").lower()
+    if environment not in {"development", "preview", "production"}:
+        raise ValueError("AI_ENVIRONMENT must be development, preview, or production")
+    return environment
 
 
 def endpoint(value: str, development: bool = False) -> str:
