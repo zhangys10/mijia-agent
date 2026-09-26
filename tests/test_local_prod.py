@@ -472,6 +472,7 @@ def test_run_prompts_for_cookie_without_echo(tmp_path, monkeypatch, capsys):
     captured = {}
     monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("visible cookie prompt"))
     monkeypatch.setattr(local_prod.getpass, "getpass", lambda _prompt: "fake-cookie")
+
     def fake_generate(_repo, cookie, _days, _home, _out, _env_file):
         captured["cookie"] = cookie
         return "v1.fake-token"
