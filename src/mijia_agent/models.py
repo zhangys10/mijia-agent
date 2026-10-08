@@ -26,7 +26,10 @@ class AssistantTurn(StrictModel):
     homeId: Annotated[str, Field(min_length=1, max_length=100)]
     message: Annotated[str, Field(min_length=1, max_length=500)]
     idempotencyKey: Annotated[str, Field(min_length=16, max_length=128)]
-    scopes: list[Literal["ai:chat"]]
+    scopes: Annotated[
+        list[Literal["ai:chat", "scene:activate", "device:operate"]],
+        Field(min_length=1, max_length=2),
+    ]
     automationToken: SecretStr
     locale: Literal["zh-CN", "en-US"] = "zh-CN"
     timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
@@ -144,6 +147,7 @@ class HomeCapabilityProjection(StrictModel):
         Field(max_length=20),
     ]
     sceneSearchAvailable: bool
+    deviceControlSearchAvailable: bool = False
 
     @model_validator(mode="after")
     def validate_exposure_lists(self):
@@ -161,6 +165,61 @@ class HomeCapabilityProjection(StrictModel):
         ):
             raise ValueError("invalid room device kinds")
         return self
+
+
+class SceneActionSummaryItem(StrictModel):
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+    value: Annotated[str, Field(max_length=80)]
+
+
+class SceneActionSummary(StrictModel):
+    room: Annotated[str | None, Field(default=None, max_length=200)] = None
+    device: Annotated[str | None, Field(default=None, max_length=200)] = None
+    actions: Annotated[list[SceneActionSummaryItem], Field(max_length=12)] = Field(
+        default_factory=list
+    )
+
+
+class AgentScene(StrictModel):
+    alias: Annotated[str, Field(pattern=r"^scene_[a-f0-9]{16}$")]
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    description: Annotated[str, Field(max_length=500)]
+    actionCount: Annotated[int, Field(ge=0)]
+    revision: Annotated[str, Field(pattern=r"^rev_[a-f0-9]{24}$")]
+    actionSummaries: Annotated[list[SceneActionSummary], Field(max_length=32)] = Field(
+        default_factory=list
+    )
+
+
+class DeviceControlChoice(StrictModel):
+    value: bool | int | float | str
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class DeviceControlRange(StrictModel):
+    min: float
+    max: float
+    step: Annotated[float, Field(gt=0)]
+
+
+class DeviceControlOperation(StrictModel):
+    operationId: Annotated[str, Field(pattern=r"^op_[a-f0-9]{24}$")]
+    revision: Annotated[str, Field(pattern=r"^rev_[a-f0-9]{24}$")]
+    property: Annotated[str, Field(min_length=1, max_length=80)]
+    label: Annotated[str, Field(min_length=1, max_length=80)]
+    valueType: Literal["boolean", "enum", "number"]
+    unit: Annotated[str | None, Field(default=None, max_length=24)] = None
+    choices: Annotated[list[DeviceControlChoice] | None, Field(default=None, max_length=32)] = None
+    range: DeviceControlRange | None = None
+
+
+class AgentDeviceControl(StrictModel):
+    deviceId: Annotated[str, Field(pattern=r"^entity_[a-f0-9]{32}$")]
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    room: Annotated[str, Field(min_length=1, max_length=200)]
+    kind: Annotated[str, Field(min_length=1, max_length=80)]
+    online: bool
+    operations: Annotated[list[DeviceControlOperation], Field(max_length=20)]
 
 
 class HomeCapabilities(StrictModel):

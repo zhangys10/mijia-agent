@@ -22,7 +22,10 @@
 | `AI_AMAP_BASE_URL`, `AI_AMAP_API_KEY`, `AI_AMAP_PRIVATE_KEY` | — | — | Required together with Caiyun to resolve mainland-China city and district names; the private key is used only server-side to generate AMap `sig` |
 | `AI_WEATHER_TIMEOUT_MS`, `AI_WEATHER_CACHE_TTL_SECONDS` | — | — | Defaults 3000 ms and 300 seconds; values are bounded to 100–3000 ms and 60–600 seconds |
 | `AI_SCENE_ACTION_LEDGER_STORE` | Console Blob namespace; defaults to `mijia-ai-scene-actions-v1` | No | No |
+| `AI_ACTION_LEDGER_STORE` | Preferred generalized Console Blob namespace; legacy scene variable is a fallback | No | No |
+| `AI_ACTION_AUTHORIZATION_SECRET` | Signs short-lived action tickets; legacy scene secret is a scene fallback | No | No |
 | `AI_SCENE_EXECUTION_ENABLED` | Keep unset/`false` until all [Phase 3 executor gates](./TODO.md) pass | No | No |
+| `AI_DEVICE_EXECUTION_ENABLED` | Keep unset/`false` until all [device executor gates](./TODO.md) pass | No | No |
 | `AI_ENVIRONMENT` | `development`, `preview`, or `production` | `development`, `preview`, or `production` | `development`, `preview`, or `production`; defaults to production |
 
 Use distinct secrets across service boundaries and environments. Python validates the

@@ -73,18 +73,18 @@ token only after a home capability is selected.
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Not registered by the canonical assistant. Do not enable physical writes until all operational gates pass. |
+| `list_device_controls` | `{}` | Bounded safe properties for explicitly selected devices, using opaque aliases |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Available only for an exact server-granted scene command |
+| `set_device_property` | `{ "deviceId": "entity_<opaque-alias>", "operationId": "op_<opaque-alias>", "revision": "rev_<sha256-prefix>", "value": true }` | Available only for an exact server-granted safe-property command |
 
 Scene discovery returns a content revision hash and normalized action summaries. The
 console exposes enabled manual scenes through individual approval or a confirmed
 home-level approval bypass; no static low-risk scene classification is applied. Bypass
 also covers future enabled scenes and scene edits in that home. The deprecated command
-router rejects every write before dispatch. The canonical assistant does not register a
-scene action capability. The automation-token tools ingress rejects direct activation
-without a per-request console-issued action scope. Scene aliases, action summaries and
-revision hashes are not authorization. Keep `AI_SCENE_EXECUTION_ENABLED` unset until the deployed
-operational gates in `docs/TODO.md` pass and action registration moves to the canonical
-assistant.
+router rejects every write before dispatch. The canonical assistant registers an action
+capability only when the console-issued token grants the exact current request. Aliases,
+summaries, revisions, and client idempotency keys are not authorization. Keep both execution
+flags unset until the deployed operational gates in `docs/TODO.md` pass.
 When enabled, a positive Xiaomi scene-run acknowledgment is reported as “request
 submitted”; it is not a device-state readback and must not be rendered as confirmed
 physical completion. A lost response or missing receipt is `AI_EXECUTION_STATUS_UNKNOWN`
@@ -197,7 +197,8 @@ the exposure-filtered measurements or states to generate its final answer. Exact
 home-read calls within one turn reuse the first result. The final answer and typed
 snapshot are returned to the caller; Makers stores a generic summary in model history
 for home-read turns, so later turns do not automatically receive past measurements.
-Scene discovery and all writes remain outside this Phase 2 contract.
+Scene and safe-device writes extend this read contract only through separately scoped,
+terminal capabilities; the Phase 2 read operations remain read-only.
 
 ## Errors and cancellation
 

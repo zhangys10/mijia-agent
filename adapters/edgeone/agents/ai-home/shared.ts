@@ -53,7 +53,10 @@ export async function authorize(context: Context) {
   const requestId = required(body.requestId);
   const automationToken = required(body.automationToken, 8192);
   const scopes = body.scopes;
-  if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== "ai:chat") throw new Error("AI_INVALID_REQUEST");
+  const allowedScopes = new Set(["ai:chat", "scene:activate", "device:operate"]);
+  if (!Array.isArray(scopes) || scopes.length < 1 || scopes.length > 2
+    || scopes[0] !== "ai:chat" || scopes.some(scope => typeof scope !== "string" || !allowedScopes.has(scope))
+    || new Set(scopes).size !== scopes.length) throw new Error("AI_INVALID_REQUEST");
   if (body.channel !== undefined && !["web", "siri", "voice", "automation"].includes(String(body.channel))) throw new Error("AI_INVALID_REQUEST");
   const toolSecret = context.env.AI_TOOLS_INTERNAL_SECRET;
   if (!toolSecret || toolSecret.length < 32) throw new Error("AI_AGENT_UNAVAILABLE");
@@ -73,6 +76,13 @@ export async function authorize(context: Context) {
     || authorization.homeId !== homeId
     || JSON.stringify(authorization.scopes) !== JSON.stringify(scopes)
   ) throw new Error("AI_UNAUTHENTICATED");
+  if (scopes.length > 1) {
+    const message = required(body.message, 500).trim();
+    const idempotencyKey = required(body.idempotencyKey, 128);
+    if (idempotencyKey.length < 16
+      || authorization.actionMessageHash !== await digest(message)
+      || authorization.actionIdempotencyKey !== idempotencyKey) throw new Error("AI_UNAUTHENTICATED");
+  }
   const scopedId = `agent_${(await digest(`${conversationId}:${principalId}:${homeId}`)).slice(0, 24)}`;
   return { body, conversationId, scopedId, principalId, homeId, requestId, automationToken, scopes, store: context.store };
 }
@@ -82,6 +92,7 @@ export function failure(error: unknown) {
   const statuses: Record<string, number> = {
     AI_UNAUTHENTICATED: 401, AI_INVALID_REQUEST: 400, AI_AGENT_STORE_UNAVAILABLE: 503,
     AI_IDEMPOTENCY_CONFLICT: 409, AI_REQUEST_IN_PROGRESS: 409, AI_EXECUTION_STATUS_UNKNOWN: 409,
+    AI_DEVICE_OFFLINE: 409, AI_DEVICE_REVISION_CHANGED: 409, AI_DEVICE_EXECUTION_DISABLED: 403,
   };
   return json({ code: Object.hasOwn(statuses, code) ? code : "AI_AGENT_UNAVAILABLE" }, statuses[code] ?? 502);
 }

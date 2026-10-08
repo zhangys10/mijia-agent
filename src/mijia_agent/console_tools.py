@@ -28,6 +28,11 @@ _ALLOWED_ERRORS = {
     "AI_ACTION_LEDGER_UNAVAILABLE": 503,
     "AI_SCENE_REVISION_CHANGED": 409,
     "AI_SCENE_NOT_EXPOSED": 403,
+    "AI_DEVICE_NOT_EXPOSED": 403,
+    "AI_DEVICE_EXECUTION_DISABLED": 403,
+    "AI_DEVICE_OFFLINE": 409,
+    "AI_DEVICE_REVISION_CHANGED": 409,
+    "AI_DEVICE_OPERATION_FAILED": 502,
     "AI_EXPOSURE_STORE_UNAVAILABLE": 503,
     "MI_CLOUD_ERROR": 502,
     "DEVICE_TIMEOUT": 504,
@@ -172,10 +177,13 @@ class ConsoleAgentTools:
         tool: str,
         home: str | None,
         arguments: dict,
+        idempotency_key: str | None = None,
     ) -> dict:
         # The console rejects an explicit null home (it validates any present
         # value as a string), so the key is omitted entirely when unset.
         body: dict = {"requestId": request_id, "tool": tool, "arguments": arguments}
+        if idempotency_key is not None:
+            body["idempotencyKey"] = idempotency_key
         if home is not None:
             body["home"] = home
         try:

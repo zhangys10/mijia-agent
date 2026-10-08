@@ -309,6 +309,31 @@ class ConversationEngine:
     ) -> AssistantResponse:
         chinese = ctx.locale.startswith("zh")
         weather = tool_name == "get_weather"
+        action = tool_name in {"activate_scene", "set_device_property"}
+        if action:
+            action_messages = {
+                "AI_SCENE_EXECUTION_DISABLED": "场景执行尚未开放。",
+                "AI_DEVICE_EXECUTION_DISABLED": "设备操作尚未开放。",
+                "AI_SCENE_NOT_EXPOSED": "该场景没有获得执行权限。",
+                "AI_DEVICE_NOT_EXPOSED": "该设备没有获得操作权限。",
+                "AI_DEVICE_OFFLINE": "设备当前离线，未发送操作。",
+                "AI_SCENE_REVISION_CHANGED": "场景内容已变化，请重新确认后再试。",
+                "AI_DEVICE_REVISION_CHANGED": "设备能力已变化，请刷新授权后再试。",
+                "AI_ACTION_LEDGER_UNAVAILABLE": "安全执行记录暂不可用，未发送操作。",
+                "AI_DEVICE_OPERATION_FAILED": "米家拒绝了设备操作。",
+                "AI_SCOPE_FORBIDDEN": "当前请求没有获得该操作权限。",
+            }
+            fallback = action_messages.get(code, "操作未执行，请检查授权后重试。")
+            return AssistantResponse(
+                request_id=ctx.request_id,
+                conversation_id=ctx.conversation_id,
+                status="completed",
+                outcome="failed" if code == "AI_DEVICE_OPERATION_FAILED" else "refused",
+                answer=Answer(text=fallback),
+                data=client_data,
+                tool_events=events,
+                usage=usage,
+            )
         messages = {
             "location_unavailable": (
                 "抱歉，这个地点的天气暂时查询不到，请稍后再试。"

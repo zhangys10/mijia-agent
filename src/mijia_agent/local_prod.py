@@ -9,9 +9,11 @@ import argparse
 import asyncio
 import errno
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -21,7 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -270,6 +272,9 @@ def generate_token(
     home: str | None,
     token_out: Path | None,
     env_file: Path,
+    action_message: str | None = None,
+    action_request_id: str | None = None,
+    action_idempotency_key: str | None = None,
     popen=None,
 ) -> str:
     """Delegate token sealing to the console repo's offline generator.
@@ -308,6 +313,20 @@ def generate_token(
         ]
         if home:
             command.extend(["--home", home])
+        action_values = (action_message, action_request_id, action_idempotency_key)
+        if any(action_values):
+            if not all(action_values):
+                raise CliError("Action token generation requires a message, request ID, and key")
+            command.extend(
+                [
+                    "--action-message",
+                    action_message,
+                    "--action-request-id",
+                    action_request_id,
+                    "--action-idempotency-key",
+                    action_idempotency_key,
+                ]
+            )
         runner = subprocess.Popen if popen is None else popen
         try:
             process = runner(
@@ -336,6 +355,14 @@ def generate_token(
                 hint = "AI_AUTOMATION_TOKEN_SECRET is missing from the selected env file"
             elif "Cannot read env file:" in (stderr or ""):
                 hint = "the selected env file could not be read by the console generator"
+            elif "must exactly identify one approved manual scene or one safe device operation" in (
+                stderr or ""
+            ):
+                hint = "action message did not match one exact authorized operation"
+            elif "ACTION_HOME_REQUIRED:" in (stderr or ""):
+                hint = "physical actions require --home to identify one accessible home"
+            elif "--home must identify exactly one accessible home" in (stderr or ""):
+                hint = "--home does not identify exactly one accessible home"
             else:
                 hint = "unexpected Node error in the console token generator"
             raise CliError(f"Console token generator failed: {hint}")
@@ -462,13 +489,15 @@ def send_assistant(
     conversation_id: str | None,
     home: str | None,
     channel: str = "web",
+    token_factory: Callable[[str, str], str] | None = None,
 ) -> tuple[dict, str]:
     key = "local-prod-" + secrets.token_hex(16)
     print(f"Request-Key: {key}")
+    request_token = token_factory(text, key) if token_factory is not None else token
     try:
         response = client.post(
             base_url + "/ai/assistant",
-            headers={"Authorization": "Bearer " + token, "Idempotency-Key": key},
+            headers={"Authorization": "Bearer " + request_token, "Idempotency-Key": key},
             json=assistant_payload(text, conversation_id, home, channel),
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
@@ -569,6 +598,7 @@ def run_assistant_repl(
     home: str | None,
     channel: str = "web",
     expect_tool: str | None = None,
+    token_factory: Callable[[str, str], str] | None = None,
     input_fn=input,
     client_factory=httpx.Client,
 ) -> None:
@@ -585,7 +615,7 @@ def run_assistant_repl(
             if not text or text in {"/quit", "/exit"}:
                 break
             body, _key = send_assistant(
-                client, base_url, token, text, conversation_id, home, channel
+                client, base_url, token, text, conversation_id, home, channel, token_factory
             )
             print_assistant_response(body, channel, expect_tool)
             if isinstance(body.get("conversationId"), str):
@@ -835,13 +865,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 0
 
+        cookie: str | None = None
+        console_repo: Path | None = None
+        token_factory: Callable[[str, str], str] | None = None
         if args.token_file is not None:
             token = load_token(args.token_file)
         elif args.cookie_file is not None:
             # Non-interactive: generate the token from the provided cookie file.
+            console_repo = resolve_console_repo(args.console_repo)
             cookie = load_cookie(args.cookie_file)
             token = generate_token(
-                resolve_console_repo(args.console_repo),
+                console_repo,
                 cookie,
                 args.token_days,
                 args.home,
@@ -849,15 +883,45 @@ def main(argv: list[str] | None = None) -> int:
                 args.env_file,
             )
         else:
+            console_repo = resolve_console_repo(args.console_repo)
             cookie = load_cookie(None)
             token = generate_token(
-                resolve_console_repo(args.console_repo),
+                console_repo,
                 cookie,
                 args.token_days,
                 args.home,
                 None,
                 args.env_file,
             )
+        if cookie is not None:
+            assert console_repo is not None
+            read_token = token
+
+            def token_for_message(message: str, key: str) -> str:
+                if not re.match(
+                    r"^(?:执行|运行|启动|打开|开启|关闭|设置|run\s|activate\s|execute\s|turn\s|set\s)",
+                    message.strip(),
+                    re.IGNORECASE,
+                ):
+                    return read_token
+                try:
+                    return generate_token(
+                        console_repo,
+                        cookie,
+                        args.token_days,
+                        args.home,
+                        None,
+                        args.env_file,
+                        message,
+                        "req_local_" + hashlib.sha256(key.encode()).hexdigest()[:24],
+                        key,
+                    )
+                except CliError as error:
+                    if "did not match one exact authorized operation" in str(error):
+                        return read_token
+                    raise
+
+            token_factory = token_for_message
         ensure_port_available(args.host, args.port)
         log_dir, log_path = private_log_path()
         env["AI_LLM_LOG_PATH"] = str(log_path)
@@ -874,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.home,
                 args.channel,
                 args.expect_tool,
+                token_factory,
             )
         except (CliError, KeyboardInterrupt) as error:
             primary_error = error

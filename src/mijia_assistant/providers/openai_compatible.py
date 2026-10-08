@@ -1,4 +1,5 @@
 import json
+import re
 
 from pydantic import ValidationError
 
@@ -108,12 +109,47 @@ class OpenAICompatibleProvider:
     async def complete(
         self, messages: list[ModelMessage], tools: list[dict], ctx: AssistantContext
     ) -> ModelTurn:
+        tool_names = {
+            tool.get("function", {}).get("name")
+            for tool in tools
+            if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+        }
+        write_authorized = bool({"scene:activate", "device:operate"}.intersection(ctx.scopes))
+        last_user_message = next(
+            (message.content for message in reversed(messages) if message.role == "user"), ""
+        )
+        action_shaped = bool(
+            re.match(
+                r"^(?:执行|运行|启动|打开|开启|关闭|设置|run\s|activate\s|execute\s|turn\s|set\s)",
+                last_user_message.strip(),
+                re.IGNORECASE,
+            )
+        )
+        completed_tools = {
+            message.name for message in messages if message.role == "tool" and message.name
+        }
+        tool_choice: str | dict = "auto"
+        if (write_authorized or action_shaped) and "discover_home_exposure" in tool_names:
+            tool_choice = self._force_tool("discover_home_exposure")
+        elif "device:operate" in ctx.scopes:
+            if (
+                "list_device_controls" not in completed_tools
+                and "list_device_controls" in tool_names
+            ):
+                tool_choice = self._force_tool("list_device_controls")
+            elif "list_device_controls" in completed_tools and "set_device_property" in tool_names:
+                tool_choice = self._force_tool("set_device_property")
+        elif "scene:activate" in ctx.scopes:
+            if "list_scenes" not in completed_tools and "list_scenes" in tool_names:
+                tool_choice = self._force_tool("list_scenes")
+            elif "list_scenes" in completed_tools and "activate_scene" in tool_names:
+                tool_choice = self._force_tool("activate_scene")
         request = {
             "model": self.gateway.settings.model,
             "temperature": 0,
             "enable_thinking": False,
             "max_tokens": self.gateway.settings.assistant_max_output_tokens,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
             "tools": tools,
             "messages": [self._message(message) for message in messages],
         }
@@ -141,6 +177,10 @@ class OpenAICompatibleProvider:
             ),
             truncated=choice.get("finish_reason") in {"length", "max_tokens"},
         )
+
+    @staticmethod
+    def _force_tool(name: str) -> dict:
+        return {"type": "function", "function": {"name": name}}
 
     @staticmethod
     def _message(message: ModelMessage) -> dict:

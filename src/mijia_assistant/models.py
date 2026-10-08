@@ -66,6 +66,7 @@ class AssistantContext:
     home_ref: str | None = None
     home_selector: str | None = None
     automation_token: SecretStr | None = field(default=None, repr=False)
+    idempotency_key: str | None = None
 
 
 class CapabilityResult(StrictModel):

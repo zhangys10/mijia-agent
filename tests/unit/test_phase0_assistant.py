@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from io import StringIO
@@ -14,15 +15,25 @@ from mijia_agent.app import create_app
 from mijia_agent.config import Settings
 from mijia_agent.gateway import Gateway
 from mijia_agent.llm_log import LlmCallLogger
-from mijia_agent.models import AgentError, DeviceStatus, HomeCapabilities, HomeStatus
+from mijia_agent.models import (
+    AgentDeviceControl,
+    AgentError,
+    DeviceStatus,
+    HomeCapabilities,
+    HomeStatus,
+)
 from mijia_assistant.capabilities import (
+    ActivateSceneCapability,
     CaiyunWeatherCapability,
     CapabilityRegistry,
     CurrentDateTimeCapability,
+    DeviceControlListCapability,
     DeviceStatusCapability,
     FakeWeatherCapability,
     HomeEnvironmentCapability,
+    SetDevicePropertyCapability,
 )
+from mijia_assistant.capabilities.home import _bounded_device_controls
 from mijia_assistant.capabilities.weather import amap_signature, caiyun_signature
 from mijia_assistant.conversation import ConversationEngine
 from mijia_assistant.models import (
@@ -65,6 +76,99 @@ def run(engine, message="hello", ctx=None):
     return asyncio.run(engine.run(ctx or context(), message))
 
 
+def test_device_control_catalog_accepts_console_response_shape():
+    device = AgentDeviceControl.model_validate(
+        {
+            "deviceId": f"entity_{'a' * 32}",
+            "name": "客厅灯带",
+            "room": "客厅",
+            "kind": "light",
+            "online": True,
+            "operations": [
+                {
+                    "operationId": f"op_{'b' * 24}",
+                    "revision": f"rev_{'c' * 24}",
+                    "property": "on",
+                    "label": "开关",
+                    "valueType": "boolean",
+                }
+            ],
+        }
+    )
+
+    assert device.name == "客厅灯带"
+    assert device.operations[0].property == "on"
+
+
+def test_device_control_catalog_is_bounded_for_the_model():
+    devices = [
+        AgentDeviceControl.model_validate(
+            {
+                "deviceId": f"entity_{index:032x}",
+                "name": f"设备 {index} " + "名" * 100,
+                "room": "客厅",
+                "kind": "light",
+                "online": True,
+                "operations": [
+                    {
+                        "operationId": f"op_{operation:024x}",
+                        "revision": f"rev_{operation:024x}",
+                        "property": "property-" + "p" * 60,
+                        "label": "操作" + "值" * 60,
+                        "valueType": "boolean",
+                    }
+                    for operation in range(20)
+                ],
+            }
+        )
+        for index in range(40)
+    ]
+
+    content = _bounded_device_controls(devices)
+    serialized = json.dumps({"devices": content}, ensure_ascii=False, separators=(",", ":"))
+    assert len(serialized.encode()) <= 9000
+    assert content[0]["deviceId"] == devices[0].deviceId
+    assert content[0]["operations"]
+
+
+def test_authorized_device_control_discovery_exposes_only_prioritized_target():
+    class Tools:
+        async def call(self, *_args):
+            return {
+                "devices": [
+                    {
+                        "deviceId": f"entity_{digit * 32}",
+                        "name": name,
+                        "room": "客厅",
+                        "kind": "light",
+                        "online": True,
+                        "operations": [
+                            {
+                                "operationId": f"op_{digit * 24}",
+                                "revision": f"rev_{digit * 24}",
+                                "property": "on",
+                                "label": "开关",
+                                "valueType": "boolean",
+                            }
+                        ],
+                    }
+                    for digit, name in (("a", "客厅灯带"), ("b", "电竞房灯带"))
+                ]
+            }
+
+    result = asyncio.run(
+        DeviceControlListCapability(Tools()).invoke(
+            context(
+                automation_token=SecretStr("opaque-token"),
+                scopes=("ai:chat", "device:operate"),
+            ),
+            {},
+        )
+    )
+
+    assert [item["name"] for item in result.model_content["devices"]] == ["客厅灯带"]
+
+
 def home_manifest(*, metrics=("temperature",), device_kinds=()):
     return HomeCapabilities.model_validate(
         {
@@ -89,6 +193,7 @@ def home_manifest(*, metrics=("temperature",), device_kinds=()):
                 "roomMetrics": {"客厅": list(metrics)},
                 "roomDeviceKinds": {"客厅": list(device_kinds)},
                 "sceneSearchAvailable": False,
+                "deviceControlSearchAvailable": False,
             },
         }
     )
@@ -824,6 +929,69 @@ class SlowWrite(TerminalWrite):
         return CapabilityResult(status="success", display_text="too late", is_terminal=True)
 
 
+class ActionTools:
+    def __init__(self, result=None, error=None):
+        self.result = result or {"message": "请求已提交，状态尚未回读。"}
+        self.error = error
+        self.calls = []
+
+    async def call(self, token, request_id, tool, home, arguments, idempotency_key=None):
+        self.calls.append((token, request_id, tool, home, arguments, idempotency_key))
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_scene_action_requires_scope_and_returns_terminal_server_result():
+    tools = ActionTools()
+    capability = ActivateSceneCapability(tools)
+    ctx = context(
+        automation_token=SecretStr("opaque-token"),
+        home_selector="home",
+        scopes=frozenset({"ai:chat", "scene:activate"}),
+        idempotency_key="idem_scene_example_1",
+    )
+    assert asyncio.run(capability.is_available(ctx)) is True
+    result = asyncio.run(
+        capability.invoke(
+            ctx,
+            {"sceneId": "scene_" + "a" * 16, "revision": "rev_" + "b" * 24},
+        )
+    )
+    assert result.is_terminal is True
+    assert result.client_data == {
+        "type": "action",
+        "action": "activate_scene",
+        "status": "submitted",
+    }
+    assert tools.calls[0][-1] == "idem_scene_example_1"
+
+
+def test_device_action_turns_unknown_transport_outcome_into_terminal_warning():
+    tools = ActionTools(error=AgentError("AI_EXECUTION_STATUS_UNKNOWN", 409))
+    capability = SetDevicePropertyCapability(tools)
+    ctx = context(
+        automation_token=SecretStr("opaque-token"),
+        home_selector="home",
+        scopes=frozenset({"ai:chat", "device:operate"}),
+        idempotency_key="idem_device_example_1",
+    )
+    result = asyncio.run(
+        capability.invoke(
+            ctx,
+            {
+                "deviceId": "entity_" + "a" * 32,
+                "operationId": "op_" + "b" * 24,
+                "revision": "rev_" + "c" * 24,
+                "value": True,
+            },
+        )
+    )
+    assert result.status == "outcome_unknown"
+    assert result.is_terminal is True
+    assert "不要自动重试" in result.display_text
+
+
 def test_write_result_is_terminal_and_model_is_not_called_again():
     capability = TerminalWrite()
     provider = ScriptedProvider(
@@ -985,7 +1153,7 @@ def test_canonical_http_response_and_token_isolation():
 
         async def call(self, token, request_id, tool, home, arguments):
             self.calls.append((token, tool, home, arguments))
-            return {"ok": True}
+            return {"ok": True, "scopes": ["ai:chat"]}
 
     auth = FakeAuth()
     app = create_app(
@@ -1014,12 +1182,86 @@ def test_canonical_http_response_and_token_isolation():
     assert "opaque-token" not in model_payload
 
 
+def test_direct_ingress_uses_console_derived_write_scope_and_request_key():
+    message = "打开客厅灯带"
+    key = "local-prod-00000000000000000000000000000001"
+
+    class FakeAuth:
+        async def call(self, token, request_id, tool, home, arguments):
+            assert request_id == "req_local_" + hashlib.sha256(key.encode()).hexdigest()[:24]
+            return {
+                "ok": True,
+                "scopes": ["ai:chat", "device:operate"],
+                "actionMessageHash": hashlib.sha256(message.encode()).hexdigest(),
+                "actionIdempotencyKey": key,
+            }
+
+    class FakeEngine:
+        async def run(self, ctx, received, history):
+            assert received == message
+            assert ctx.scopes == frozenset({"ai:chat", "device:operate"})
+            assert ctx.idempotency_key == key
+            return AssistantResponse(
+                request_id=ctx.request_id,
+                conversation_id=ctx.conversation_id,
+                status="completed",
+                outcome="action_result",
+                answer=Answer(text="请求已提交。"),
+                tool_events=[ToolEvent(name="set_device_property", status="success")],
+            )
+
+    app = create_app(
+        app_settings(),
+        assistant_engine=FakeEngine(),
+        assistant_tools=FakeAuth(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/ai/assistant",
+            headers={"Authorization": "Bearer opaque-token", "Idempotency-Key": key},
+            json={"text": message},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "action_result"
+
+
+def test_direct_ingress_rejects_write_scope_bound_to_another_request_key():
+    class FakeAuth:
+        async def call(self, token, request_id, tool, home, arguments):
+            return {
+                "ok": True,
+                "scopes": ["ai:chat", "device:operate"],
+                "actionMessageHash": hashlib.sha256("打开客厅灯带".encode()).hexdigest(),
+                "actionIdempotencyKey": "different-request-key-0001",
+            }
+
+    provider = ScriptedProvider(ModelTurn(content="must not run"))
+    app = create_app(
+        app_settings(),
+        assistant_engine=ConversationEngine(provider, CapabilityRegistry()),
+        assistant_tools=FakeAuth(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/ai/assistant",
+            headers={
+                "Authorization": "Bearer opaque-token",
+                "Idempotency-Key": "local-prod-00000000000000000000000000000001",
+            },
+            json={"text": "打开客厅灯带"},
+        )
+
+    assert response.status_code == 401
+    assert provider.requests == []
+
+
 def test_direct_siri_response_has_a_bounded_speech_renderer():
     provider = ScriptedProvider(ModelTurn(content="答" * 400))
 
     class FakeAuth:
         async def call(self, token, request_id, tool, home, arguments):
-            return {"ok": True}
+            return {"ok": True, "scopes": ["ai:chat"]}
 
     app = create_app(
         app_settings(),
@@ -1171,7 +1413,7 @@ def test_canonical_ingress_keeps_bounded_redacted_history_for_follow_up():
 
     class FakeAuth:
         async def call(self, token, request_id, tool, home, arguments):
-            return {"ok": True}
+            return {"ok": True, "scopes": ["ai:chat"]}
 
     app = create_app(
         app_settings(),
@@ -1295,6 +1537,113 @@ def test_openai_adapter_uses_the_assistant_completion_limit():
     )
 
     assert gateway.request["max_tokens"] == 512
+
+
+def test_openai_adapter_forces_read_only_manifest_discovery_for_action_command():
+    class FakeGateway:
+        settings = SimpleNamespace(model="validated-model", assistant_max_output_tokens=512)
+
+        async def chat(self, request, log_context, **kwargs):
+            self.request = request
+            usage = SimpleNamespace(
+                promptTokens=7, completionTokens=2, totalTokens=9, estimated=False
+            )
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_discover",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "discover_home_exposure",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }, usage
+
+    gateway = FakeGateway()
+    tool = {
+        "type": "function",
+        "function": {"name": "discover_home_exposure", "parameters": {"type": "object"}},
+    }
+    turn = asyncio.run(
+        OpenAICompatibleProvider(gateway).complete(
+            [ModelMessage(role="user", content="打开客厅灯带")],
+            [tool],
+            context(scopes=("ai:chat",)),
+        )
+    )
+
+    assert gateway.request["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "discover_home_exposure"},
+    }
+    assert turn.tool_calls[0].name == "discover_home_exposure"
+
+
+def test_openai_adapter_forces_authorized_device_discovery_then_terminal_write():
+    class FakeGateway:
+        settings = SimpleNamespace(model="validated-model", assistant_max_output_tokens=512)
+
+        async def chat(self, request, log_context, **kwargs):
+            self.request = request
+            forced = request["tool_choice"]["function"]["name"]
+            usage = SimpleNamespace(
+                promptTokens=7, completionTokens=2, totalTokens=9, estimated=False
+            )
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_forced",
+                                    "type": "function",
+                                    "function": {"name": forced, "arguments": "{}"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }, usage
+
+    tools = [
+        {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+        for name in ("list_device_controls", "set_device_property")
+    ]
+    gateway = FakeGateway()
+    provider = OpenAICompatibleProvider(gateway)
+    authorized = context(scopes=("ai:chat", "device:operate"))
+    asyncio.run(
+        provider.complete(
+            [
+                ModelMessage(role="user", content="打开客厅灯带"),
+                ModelMessage(role="tool", content="{}", name="discover_home_exposure"),
+            ],
+            tools,
+            authorized,
+        )
+    )
+    assert gateway.request["tool_choice"]["function"]["name"] == "list_device_controls"
+
+    asyncio.run(
+        provider.complete(
+            [
+                ModelMessage(role="user", content="打开客厅灯带"),
+                ModelMessage(role="tool", content="{}", name="discover_home_exposure"),
+                ModelMessage(role="tool", content="{}", name="list_device_controls"),
+            ],
+            tools,
+            authorized,
+        )
+    )
+    assert gateway.request["tool_choice"]["function"]["name"] == "set_device_property"
 
 
 def test_normalizer_accepts_gateway_object_tool_arguments():

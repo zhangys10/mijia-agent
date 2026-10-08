@@ -4,7 +4,7 @@ from mijia_agent.models import HomeCapabilities
 from mijia_assistant.models import AssistantContext
 
 from .base import Capability
-from .home import DeviceStatusCapability, HomeEnvironmentCapability, HomeExposureDiscoveryCapability
+from .home import HomeExposureDiscoveryCapability
 
 
 class CapabilityRegistry:
@@ -18,10 +18,10 @@ class CapabilityRegistry:
         self, ctx: AssistantContext, manifest: HomeCapabilities | None = None
     ) -> dict[str, Capability]:
         available: dict[str, Capability] = {}
-        home_templates: list[HomeEnvironmentCapability | DeviceStatusCapability] = []
+        home_templates: list[Capability] = []
         for capability in self._capabilities:
             if await capability.is_available(ctx):
-                if isinstance(capability, (HomeEnvironmentCapability, DeviceStatusCapability)):
+                if getattr(capability, "requires_home_manifest", False):
                     home_templates.append(capability)
                 else:
                     available[capability.name] = capability

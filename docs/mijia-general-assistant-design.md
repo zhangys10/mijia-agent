@@ -1122,6 +1122,17 @@ The remaining work is validation rather than product choice: measure Caiyun late
 18. Add acceptance tests proving `今天天气怎么样` clarifies location and `今天新加坡天气怎么样` uses live data.
 19. Remove the deprecated router stack after the documented completion gates pass.
 
+## 25. Approved physical actions
+
+The canonical assistant may expose `activate_scene` and `set_device_property` only for an
+exact current command carrying a console-issued, short-lived action scope. Device writes require
+the home master exposure, an independent default-off device-action toggle, explicit device
+selection, and a property accepted by the shared safe scene-property allowlist. The executor
+revalidates current exposure, online state, revision, and value before an atomic durable claim.
+Acknowledgment means submitted, not confirmed state; a timeout or missing receipt is terminally
+unknown and is never retried automatically. Deployment flags stay disabled until the runbook's
+deployed concurrency and real-target checks pass.
+
 ---
 
 This document supersedes the scene-router direction for future development. Existing migration and steward-alignment documents remain historical evidence until they are archived or rewritten.
