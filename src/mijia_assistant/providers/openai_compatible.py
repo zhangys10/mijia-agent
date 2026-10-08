@@ -135,19 +135,6 @@ class OpenAICompatibleProvider:
             and "discover_home_exposure" not in completed_tools
         ):
             tool_choice = self._force_tool("discover_home_exposure")
-        elif "device:operate" in ctx.scopes:
-            if (
-                "list_device_controls" not in completed_tools
-                and "list_device_controls" in tool_names
-            ):
-                tool_choice = self._force_tool("list_device_controls")
-            elif "list_device_controls" in completed_tools and "set_device_property" in tool_names:
-                tool_choice = self._force_tool("set_device_property")
-        elif "scene:activate" in ctx.scopes:
-            if "list_scenes" not in completed_tools and "list_scenes" in tool_names:
-                tool_choice = self._force_tool("list_scenes")
-            elif "list_scenes" in completed_tools and "activate_scene" in tool_names:
-                tool_choice = self._force_tool("activate_scene")
         request = {
             "model": self.gateway.settings.model,
             "temperature": 0,

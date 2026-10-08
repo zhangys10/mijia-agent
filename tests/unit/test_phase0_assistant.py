@@ -1587,13 +1587,13 @@ def test_openai_adapter_forces_read_only_manifest_discovery_for_action_command()
     assert turn.tool_calls[0].name == "discover_home_exposure"
 
 
-def test_openai_adapter_forces_authorized_device_discovery_then_terminal_write():
+def test_openai_adapter_returns_to_auto_selection_after_manifest():
     class FakeGateway:
         settings = SimpleNamespace(model="validated-model", assistant_max_output_tokens=512)
 
         async def chat(self, request, log_context, **kwargs):
             self.request = request
-            forced = request["tool_choice"]["function"]["name"]
+            forced = "list_device_controls"
             usage = SimpleNamespace(
                 promptTokens=7, completionTokens=2, totalTokens=9, estimated=False
             )
@@ -1630,7 +1630,7 @@ def test_openai_adapter_forces_authorized_device_discovery_then_terminal_write()
             authorized,
         )
     )
-    assert gateway.request["tool_choice"]["function"]["name"] == "list_device_controls"
+    assert gateway.request["tool_choice"] == "auto"
 
     asyncio.run(
         provider.complete(
@@ -1643,7 +1643,7 @@ def test_openai_adapter_forces_authorized_device_discovery_then_terminal_write()
             authorized,
         )
     )
-    assert gateway.request["tool_choice"]["function"]["name"] == "set_device_property"
+    assert gateway.request["tool_choice"] == "auto"
 
 
 def test_normalizer_accepts_gateway_object_tool_arguments():
