@@ -452,8 +452,10 @@ class DeviceControlListCapability(_HomeReadCapability):
             raise AssistantError(error.code, error.status, error.diagnostic_code) from None
         except (TypeError, ValueError, ValidationError):
             raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502) from None
-        visible_devices = devices[:1] if "device:operate" in ctx.scopes else devices
-        content = _bounded_device_controls(visible_devices)
+        # The console places an exact granted target first. Keep this action
+        # projection single-target so a one-device command does not spend a
+        # model turn carrying the rest of the home's catalog.
+        content = _bounded_device_controls(devices[:1])
         return CapabilityResult(
             status="success",
             model_content={"devices": content},
