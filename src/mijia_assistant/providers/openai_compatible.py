@@ -129,7 +129,11 @@ class OpenAICompatibleProvider:
             message.name for message in messages if message.role == "tool" and message.name
         }
         tool_choice: str | dict = "auto"
-        if (write_authorized or action_shaped) and "discover_home_exposure" in tool_names:
+        if (
+            (write_authorized or action_shaped)
+            and "discover_home_exposure" in tool_names
+            and "discover_home_exposure" not in completed_tools
+        ):
             tool_choice = self._force_tool("discover_home_exposure")
         elif "device:operate" in ctx.scopes:
             if (

@@ -1615,7 +1615,7 @@ def test_openai_adapter_forces_authorized_device_discovery_then_terminal_write()
 
     tools = [
         {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
-        for name in ("list_device_controls", "set_device_property")
+        for name in ("discover_home_exposure", "list_device_controls", "set_device_property")
     ]
     gateway = FakeGateway()
     provider = OpenAICompatibleProvider(gateway)
