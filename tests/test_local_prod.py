@@ -252,6 +252,43 @@ def test_generate_token_delegates_via_private_file(tmp_path):
     assert "XIAOMI_SESSION_SECRET" not in child_env
 
 
+def test_generate_token_binds_action_message_and_visible_request_key(tmp_path):
+    script_path = tmp_path / "fake-console" / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("console.log('v1.fake-token');\n", encoding="utf-8")
+    captured = {}
+
+    def fake_popen(command, **_kwargs):
+        captured["command"] = command
+
+        class Proc:
+            returncode = 0
+
+            def communicate(self):
+                return "v1.action-token\n", ""
+
+        return Proc()
+
+    token = local_prod.generate_token(
+        tmp_path / "fake-console",
+        "pasted-cookie-value",
+        30,
+        "home-a",
+        None,
+        tmp_path / "production.env",
+        "打开客厅灯带",
+        "req_local_000000000001",
+        "local-prod-00000000000000000000000000000001",
+        popen=fake_popen,
+    )
+
+    assert token == "v1.action-token"
+    command = captured["command"]
+    assert command[command.index("--action-message") + 1] == "打开客厅灯带"
+    assert command[command.index("--action-request-id") + 1] == "req_local_000000000001"
+    assert command[command.index("--action-idempotency-key") + 1].startswith("local-prod-")
+
+
 def test_generate_token_rejects_bad_days(tmp_path):
     script_path = tmp_path / "scripts" / "generate-automation-token.ts"
     script_path.parent.mkdir(parents=True)
@@ -295,6 +332,35 @@ def test_generate_token_reports_cookie_secret_mismatch_without_node_footer(tmp_p
         )
 
     assert "Node.js" not in str(caught.value)
+
+
+def test_generate_token_reports_missing_action_home_without_node_details(tmp_path):
+    script_path = tmp_path / "scripts" / "generate-automation-token.ts"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("// stub\n", encoding="utf-8")
+
+    def fake_popen(_command, **_kwargs):
+        class Proc:
+            returncode = 2
+
+            def communicate(self):
+                return "", "ACTION_HOME_REQUIRED: --home must identify one accessible home.\n"
+
+        return Proc()
+
+    with pytest.raises(local_prod.CliError, match="physical actions require --home"):
+        local_prod.generate_token(
+            tmp_path,
+            "fake-cookie",
+            30,
+            None,
+            None,
+            tmp_path / "production.env",
+            "打开客厅灯带",
+            "req_local_000000000001",
+            "local-prod-00000000000000000000000000000001",
+            popen=fake_popen,
+        )
 
 
 def test_generate_token_requires_out_file_and_never_prints(tmp_path, capsys):
@@ -659,6 +725,36 @@ def test_send_assistant_forwards_channel_and_expectations_check_read_tool(capsys
     output = capsys.readouterr().out
     assert "speechText: 客厅温度正常。" in output
     assert "tool: get_home_environment (success)" in output
+
+
+def test_send_assistant_uses_per_request_action_token_bound_to_printed_key(capsys):
+    observed = {}
+
+    def handler(request):
+        observed["authorization"] = request.headers["Authorization"]
+        observed["key"] = request.headers["Idempotency-Key"]
+        return httpx.Response(200, json={"outcome": "tool_answer", "answer": {"text": "ok"}})
+
+    def token_factory(message, key):
+        observed["message"] = message
+        observed["factory_key"] = key
+        return "fresh-action-token"
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        local_prod.send_assistant(
+            client,
+            "http://local",
+            "read-token",
+            "打开客厅灯带",
+            None,
+            "home-a",
+            token_factory=token_factory,
+        )
+
+    assert observed["authorization"] == "Bearer fresh-action-token"
+    assert observed["message"] == "打开客厅灯带"
+    assert observed["factory_key"] == observed["key"]
+    assert observed["key"] in capsys.readouterr().out
 
 
 def test_assistant_live_read_expectations_fail_closed(capsys):

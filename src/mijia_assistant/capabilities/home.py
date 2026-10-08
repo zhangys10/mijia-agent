@@ -1,7 +1,10 @@
+import json
 from typing import ClassVar, Literal
 
+from pydantic import TypeAdapter, ValidationError
+
 from mijia_agent.console_tools import ConsoleAgentTools
-from mijia_agent.models import AgentError, HomeCapabilities
+from mijia_agent.models import AgentDeviceControl, AgentError, AgentScene, HomeCapabilities
 from mijia_assistant.models import AssistantContext, AssistantError, CapabilityResult
 
 HOME_METRICS = (
@@ -16,8 +19,41 @@ HOME_METRICS = (
     "battery",
 )
 
+_DEVICE_CONTROL_MODEL_LIMIT = 9000
+
+
+def _bounded_device_controls(devices: list[AgentDeviceControl]) -> list[dict]:
+    content: list[dict] = []
+    for device in devices[:40]:
+        projected = device.model_dump(exclude_none=True)
+        candidate = {"devices": [*content, projected]}
+        if len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":")).encode()) <= (
+            _DEVICE_CONTROL_MODEL_LIMIT
+        ):
+            content.append(projected)
+            continue
+        if content:
+            break
+        operations = projected.pop("operations")
+        projected["operations"] = []
+        for operation in operations:
+            candidate = {
+                "devices": [{**projected, "operations": [*projected["operations"], operation]}]
+            }
+            if (
+                len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":")).encode())
+                > _DEVICE_CONTROL_MODEL_LIMIT
+            ):
+                break
+            projected["operations"].append(operation)
+        if projected["operations"]:
+            content.append(projected)
+        break
+    return content
+
 
 class _HomeReadCapability:
+    requires_home_manifest = True
     risk: Literal["home_read"] = "home_read"
     input_schema: ClassVar[dict]
 
@@ -338,4 +374,201 @@ class DeviceStatusCapability(_HomeReadCapability):
                 if status.completeness == "empty"
                 else "已读取当前家庭设备状态。"
             ),
+        )
+
+
+class SceneListCapability(_HomeReadCapability):
+    name = "list_scenes"
+    description = "List the approved enabled manual scenes for this home."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+    def bind(self, manifest: HomeCapabilities):
+        return (
+            type(self)(self.tools, manifest) if manifest.projection.sceneSearchAvailable else None
+        )
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        if args:
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            payload = await self.tools.call(
+                self._token(ctx), ctx.request_id, self.name, ctx.home_selector, {}
+            )
+            scenes = TypeAdapter(list[AgentScene]).validate_python(payload.get("scenes"))
+        except AgentError as error:
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        except (TypeError, ValueError, ValidationError):
+            raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502) from None
+        content = [
+            {
+                "alias": scene.alias,
+                "name": scene.name,
+                "description": scene.description,
+                "revision": scene.revision,
+                "actionCount": scene.actionCount,
+                "actionSummaries": [item.model_dump() for item in scene.actionSummaries],
+            }
+            for scene in scenes[:40]
+        ]
+        return CapabilityResult(
+            status="success",
+            model_content={"scenes": content},
+            client_data={"type": "scenes", "scenes": content},
+            display_text="当前没有已授权的可用场景。"
+            if not content
+            else "已读取当前家庭的可用场景。",
+        )
+
+
+class DeviceControlListCapability(_HomeReadCapability):
+    name = "list_device_controls"
+    description = "List safe controls for devices explicitly enabled for assistant operations."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+    def bind(self, manifest: HomeCapabilities):
+        return (
+            type(self)(self.tools, manifest)
+            if manifest.projection.deviceControlSearchAvailable
+            else None
+        )
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        if args:
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            payload = await self.tools.call(
+                self._token(ctx), ctx.request_id, self.name, ctx.home_selector, {}
+            )
+            devices = TypeAdapter(list[AgentDeviceControl]).validate_python(payload.get("devices"))
+        except AgentError as error:
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        except (TypeError, ValueError, ValidationError):
+            raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502) from None
+        visible_devices = devices[:1] if "device:operate" in ctx.scopes else devices
+        content = _bounded_device_controls(visible_devices)
+        return CapabilityResult(
+            status="success",
+            model_content={"devices": content},
+            client_data={"type": "device_controls", "devices": content},
+            display_text="当前没有已授权的安全设备操作。"
+            if not content
+            else "已读取可用的安全设备操作。",
+        )
+
+
+class ActivateSceneCapability(_HomeReadCapability):
+    name = "activate_scene"
+    risk: Literal["home_write_scene"] = "home_write_scene"
+    description = "Activate the exact approved scene authorized for this current request."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "sceneId": {"type": "string", "pattern": "^scene_[a-f0-9]{16}$"},
+            "revision": {"type": "string", "pattern": "^rev_[a-f0-9]{24}$"},
+        },
+        "required": ["sceneId", "revision"],
+    }
+
+    async def is_available(self, ctx: AssistantContext) -> bool:
+        return await super().is_available(ctx) and "scene:activate" in ctx.scopes
+
+    def bind(self, manifest: HomeCapabilities):
+        return (
+            type(self)(self.tools, manifest) if manifest.projection.sceneSearchAvailable else None
+        )
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        if (
+            set(args) != {"sceneId", "revision"}
+            or not isinstance(args.get("sceneId"), str)
+            or not isinstance(args.get("revision"), str)
+        ):
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            result = await self.tools.call(
+                self._token(ctx),
+                ctx.request_id,
+                self.name,
+                ctx.home_selector,
+                args,
+                ctx.idempotency_key,
+            )
+        except AgentError as error:
+            if error.code == "AI_EXECUTION_STATUS_UNKNOWN":
+                return CapabilityResult(
+                    status="outcome_unknown",
+                    display_text="场景执行结果不确定，请检查设备状态；不要自动重试。",
+                    is_terminal=True,
+                )
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        return CapabilityResult(
+            status="success",
+            display_text=str(result.get("message") or "场景执行请求已提交，设备状态尚未回读。"),
+            client_data={"type": "action", "action": "activate_scene", "status": "submitted"},
+            is_terminal=True,
+        )
+
+
+class SetDevicePropertyCapability(_HomeReadCapability):
+    name = "set_device_property"
+    risk: Literal["home_write_high"] = "home_write_high"
+    description = "Set the exact safe device property authorized for this current request."
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "deviceId": {"type": "string", "pattern": "^entity_[a-f0-9]{32}$"},
+            "operationId": {"type": "string", "pattern": "^op_[a-f0-9]{24}$"},
+            "revision": {"type": "string", "pattern": "^rev_[a-f0-9]{24}$"},
+            "value": {"type": ["boolean", "number", "string"]},
+        },
+        "required": ["deviceId", "operationId", "revision", "value"],
+    }
+
+    async def is_available(self, ctx: AssistantContext) -> bool:
+        return await super().is_available(ctx) and "device:operate" in ctx.scopes
+
+    def bind(self, manifest: HomeCapabilities):
+        return (
+            type(self)(self.tools, manifest)
+            if manifest.projection.deviceControlSearchAvailable
+            else None
+        )
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        if set(args) != {"deviceId", "operationId", "revision", "value"} or type(
+            args.get("value")
+        ) not in {bool, int, float, str}:
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            result = await self.tools.call(
+                self._token(ctx),
+                ctx.request_id,
+                self.name,
+                ctx.home_selector,
+                args,
+                ctx.idempotency_key,
+            )
+        except AgentError as error:
+            if error.code == "AI_EXECUTION_STATUS_UNKNOWN":
+                return CapabilityResult(
+                    status="outcome_unknown",
+                    display_text="设备操作结果不确定，请检查设备状态；不要自动重试。",
+                    is_terminal=True,
+                )
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        return CapabilityResult(
+            status="success",
+            display_text=str(result.get("message") or "设备操作请求已提交，设备状态尚未回读。"),
+            client_data={"type": "action", "action": "set_device_property", "status": "submitted"},
+            is_terminal=True,
         )

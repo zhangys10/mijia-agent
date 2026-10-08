@@ -4,10 +4,10 @@ Python agent development extracted from `zhangys10/mijia-web-console`.
 This repository owns model integration, intent handling, controlled tool calls,
 and future reminder/preference features. Xiaomi protocol code stays in the web console.
 
-**Status: Phase 3 safety foundations present; canonical scene-action registration is pending.** The Python core,
-Makers adapter, and companion web-console implementation include per-home scene approval,
-revision-bound checks, and a durable console execution ledger. Scene writes remain disabled
-until the deployed checks in [docs/TODO.md](docs/TODO.md) pass.
+**Status: canonical scene and safe-device actions are implemented behind default-off gates.**
+The Python core, Makers adapter, and companion console include exact-command grants,
+revision-bound authorization, and a durable action ledger. Physical writes remain disabled until
+[the deployment gates](docs/TODO.md) and [runbook](docs/action-execution-runbook.md) pass.
 No live deployment, model invocation, or device control was performed during extraction.
 
 ## Read first

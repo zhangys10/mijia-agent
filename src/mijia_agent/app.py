@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 import json
 import uuid
@@ -11,11 +12,15 @@ from pydantic import SecretStr, ValidationError
 
 from mijia_assistant.api import AssistantRequest, public_response
 from mijia_assistant.capabilities import (
+    ActivateSceneCapability,
     CaiyunWeatherCapability,
     CapabilityRegistry,
     CurrentDateTimeCapability,
+    DeviceControlListCapability,
     DeviceStatusCapability,
     HomeEnvironmentCapability,
+    SceneListCapability,
+    SetDevicePropertyCapability,
 )
 from mijia_assistant.conversation import ConversationEngine, ConversationRepository
 from mijia_assistant.conversation.history import model_history_answer
@@ -54,6 +59,10 @@ def create_lifespan(
                 CurrentDateTimeCapability(),
                 HomeEnvironmentCapability(console_tools),
                 DeviceStatusCapability(console_tools),
+                SceneListCapability(console_tools),
+                DeviceControlListCapability(console_tools),
+                ActivateSceneCapability(console_tools),
+                SetDevicePropertyCapability(console_tools),
             ]
             if config.caiyun_base_url and config.amap_base_url:
                 capabilities.append(
@@ -95,7 +104,12 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             return JSONResponse({"code": "AUTOMATION_TOKEN_INVALID"}, 401, headers=headers)
         if config.environment == "preview":
             return JSONResponse({"code": "AI_PREVIEW_READ_ONLY"}, 403, headers=headers)
-        request_id = "req_" + uuid.uuid4().hex
+        idempotency_key = request.headers.get("idempotency-key")
+        request_id = (
+            "req_local_" + hashlib.sha256(idempotency_key.encode()).hexdigest()[:24]
+            if isinstance(idempotency_key, str) and 16 <= len(idempotency_key) <= 128
+            else "req_" + uuid.uuid4().hex
+        )
         try:
             raw = bytearray()
             async for chunk in request.stream():
@@ -109,6 +123,25 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
             )
             if authorization.get("ok") is not True:
                 raise AssistantError("UNAUTHORIZED", 401)
+            authorized_scopes = authorization.get("scopes")
+            allowed_scopes = {"ai:chat", "scene:activate", "device:operate"}
+            if (
+                not isinstance(authorized_scopes, list)
+                or not 1 <= len(authorized_scopes) <= 2
+                or authorized_scopes[0] != "ai:chat"
+                or len(set(authorized_scopes)) != len(authorized_scopes)
+                or any(scope not in allowed_scopes for scope in authorized_scopes)
+            ):
+                raise AssistantError("UNAUTHORIZED", 401)
+            if len(authorized_scopes) > 1:
+                message_hash = hashlib.sha256(body.text.strip().encode()).hexdigest()
+                if (
+                    not isinstance(idempotency_key, str)
+                    or not 16 <= len(idempotency_key) <= 128
+                    or authorization.get("actionMessageHash") != message_hash
+                    or authorization.get("actionIdempotencyKey") != idempotency_key
+                ):
+                    raise AssistantError("UNAUTHORIZED", 401)
             timeout = 12 if body.channel == "siri" else 20
             context = AssistantContext(
                 request_id=request_id,
@@ -116,10 +149,11 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 channel=body.channel,
                 locale=body.locale,
                 timezone=body.timezone,
-                scopes=frozenset({"ai:chat"}),
+                scopes=frozenset(authorized_scopes),
                 deadline=datetime.now(timezone.utc) + timedelta(seconds=timeout),
                 home_selector=body.home,
                 automation_token=SecretStr(token),
+                idempotency_key=idempotency_key,
             )
             history = await app.state.conversation_repository.get(context)
             result = await app.state.assistant_engine.run(context, body.text, history)
@@ -178,6 +212,7 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 home_ref=turn.homeId,
                 home_selector=turn.homeId,
                 automation_token=turn.automationToken,
+                idempotency_key=turn.idempotencyKey,
             )
             history = [ModelMessage(role=item.role, content=item.content) for item in turn.history]
             result = await app.state.assistant_engine.run(context, turn.message, history)
@@ -193,6 +228,9 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 {
                     "get_home_environment": "get_home_status",
                     "get_device_status": "get_device_status",
+                    "list_scenes": "list_scenes",
+                    "activate_scene": "activate_scene",
+                    "set_device_property": "set_device_property",
                 }.get(event.name, "none")
                 if event
                 else "none"
@@ -233,7 +271,15 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                     body["deviceStatus"] = {
                         key: value for key, value in result.data.items() if key != "type"
                     }
-            if event is not None and intent in {"get_home_status", "get_device_status"}:
+            if result.data is not None and result.data.get("type") == "scenes":
+                body["scenes"] = result.data.get("scenes", [])
+            if event is not None and intent in {
+                "get_home_status",
+                "get_device_status",
+                "list_scenes",
+                "activate_scene",
+                "set_device_property",
+            }:
                 body["tool"] = {
                     "name": intent,
                     "status": "partial_success" if event.status == "partial" else "success",
