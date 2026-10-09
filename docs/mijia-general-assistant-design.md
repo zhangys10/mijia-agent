@@ -1124,11 +1124,14 @@ The remaining work is validation rather than product choice: measure Caiyun late
 
 ## 25. Approved physical actions
 
-The canonical assistant may expose `activate_scene` and `set_device_property` only for an
-exact current command carrying a console-issued, short-lived action scope. Device writes require
-the home master exposure, an independent default-off device-action toggle, explicit device
-selection, and a property accepted by the shared safe scene-property allowlist. The executor
-revalidates current exposure, online state, revision, and value before an atomic durable claim.
+The canonical assistant uses a two-phase physical-action flow. On a message-bound `ai:chat`
+turn, the model may propose an opaque approved scene or a selected device's safe properties.
+The console validates that proposal against current exposure, revisions, values and execution
+gates, then issues a short-lived sealed action token only to Python. Python uses it for a
+terminal write without another model call. Device writes require the home master exposure,
+an independent default-off device-action toggle, explicit device selection, and a property
+accepted by the shared safe scene-property allowlist. The executor revalidates current
+exposure, online state, revision, and value before an atomic durable claim.
 Acknowledgment means submitted, not confirmed state; a timeout or missing receipt is terminally
 unknown and is never retried automatically. Deployment flags stay disabled until the runbook's
 deployed concurrency and real-target checks pass.

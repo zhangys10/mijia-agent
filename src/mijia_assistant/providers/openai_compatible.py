@@ -1,5 +1,4 @@
 import json
-import re
 
 from pydantic import ValidationError
 
@@ -114,34 +113,34 @@ class OpenAICompatibleProvider:
             for tool in tools
             if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
         }
-        write_authorized = bool({"scene:activate", "device:operate"}.intersection(ctx.scopes))
-        last_user_message = next(
-            (message.content for message in reversed(messages) if message.role == "user"), ""
-        )
-        action_shaped = bool(
-            re.match(
-                r"^(?:执行|运行|启动|打开|开启|关闭|设置|run\s|activate\s|execute\s|turn\s|set\s)",
-                last_user_message.strip(),
-                re.IGNORECASE,
-            )
-        )
         completed_tools = {
             message.name for message in messages if message.role == "tool" and message.name
         }
-        tool_choice: str | dict = "auto"
-        if (
-            (write_authorized or action_shaped)
-            and "discover_home_exposure" in tool_names
-            and "discover_home_exposure" not in completed_tools
-        ):
-            tool_choice = self._force_tool("discover_home_exposure")
+        request_tools = tools
+        tool_choice = "auto"
+        if "device:operate" in ctx.scopes:
+            next_tool = (
+                "list_device_controls"
+                if "list_device_controls" not in completed_tools
+                else "set_device_property"
+            )
+            if next_tool in tool_names:
+                request_tools = [
+                    tool for tool in tools if tool.get("function", {}).get("name") == next_tool
+                ]
+        elif "scene:activate" in ctx.scopes:
+            next_tool = "list_scenes" if "list_scenes" not in completed_tools else "activate_scene"
+            if next_tool in tool_names:
+                request_tools = [
+                    tool for tool in tools if tool.get("function", {}).get("name") == next_tool
+                ]
         request = {
             "model": self.gateway.settings.model,
             "temperature": 0,
             "enable_thinking": False,
             "max_tokens": self.gateway.settings.assistant_max_output_tokens,
             "tool_choice": tool_choice,
-            "tools": tools,
+            "tools": request_tools,
             "messages": [self._message(message) for message in messages],
         }
         body, legacy_usage = await self.gateway.chat(
@@ -158,7 +157,7 @@ class OpenAICompatibleProvider:
             raw = choice["message"]
         except (KeyError, IndexError, TypeError):
             raise AssistantError("MODEL_RESPONSE_INVALID", 502) from None
-        return normalize_message(
+        turn = normalize_message(
             raw,
             Usage(
                 prompt_tokens=legacy_usage.promptTokens,
@@ -168,10 +167,21 @@ class OpenAICompatibleProvider:
             ),
             truncated=choice.get("finish_reason") in {"length", "max_tokens"},
         )
-
-    @staticmethod
-    def _force_tool(name: str) -> dict:
-        return {"type": "function", "function": {"name": name}}
+        # An exact action grant makes the two argument-free catalog reads
+        # mandatory orchestration steps. Some compatible gateways can exhaust
+        # the completion budget before emitting their otherwise inevitable tool
+        # call. Advancing to the sole offered read is deterministic and safe;
+        # writes are deliberately excluded because their bound arguments must
+        # still come from the model and pass Console grant validation.
+        if turn.truncated and not turn.tool_calls and len(request_tools) == 1:
+            name = request_tools[0].get("function", {}).get("name")
+            if name in {"discover_home_exposure", "list_device_controls", "list_scenes"}:
+                return ModelTurn(
+                    content="",
+                    tool_calls=[ToolCall(id=f"call_{name}", name=name, arguments={})],
+                    usage=turn.usage,
+                )
+        return turn
 
     @staticmethod
     def _message(message: ModelMessage) -> dict:

@@ -86,12 +86,15 @@ allowlist, fixed non-thinking mode, bounded output and timeout. No production mo
 is hardcoded. The baseline recorded `@makers/deepseek-v4-flash` as verified on
 2026-09-17; this remains a deployment observation, not a source default.
 
-The canonical assistant registers `activate_scene` or `set_device_property` only when the
-console issues a short-lived scope for that exact current request. Scene discovery remains
-revision-approved. Device writes require explicit device selection, a separate default-off
-write toggle, and the existing safe scene-property allowlist. The console revalidates current
-exposure, revision, value, and online state before a durable claim. Deployment flags remain off
-until the checks in `docs/TODO.md` pass.
+The canonical assistant now uses two phases for physical actions. An `ai:chat` turn lets the
+model select an opaque scene or safe device operation from a sanitized catalog. Python sends
+that proposal to the console, which validates the current exposure, revision, value, online
+state, execution flag and message-bound request before sealing a short-lived action token.
+Python immediately uses that token for the existing terminal write path, without a model
+follow-up. The console revalidates again before its durable claim. Scene discovery remains
+revision-approved; device writes still require explicit selection, a separate default-off
+write toggle and the scene-editor safe-property allowlist. Deployment flags remain off until
+the checks in `docs/TODO.md` pass.
 `get_home_status` is read-only and needs only `ai:chat`: Python fetches the sanitized
 environment snapshot from the console tools API only after the model selects the tool.
 The exposure-filtered snapshot is returned as structured `Result.homeStatus` data and

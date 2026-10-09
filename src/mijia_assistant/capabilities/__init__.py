@@ -4,6 +4,8 @@ from .home import (
     DeviceControlListCapability,
     DeviceStatusCapability,
     HomeEnvironmentCapability,
+    ProposeDeviceActionCapability,
+    ProposeSceneActionCapability,
     SceneListCapability,
     SetDevicePropertyCapability,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "DeviceStatusCapability",
     "FakeWeatherCapability",
     "HomeEnvironmentCapability",
+    "ProposeDeviceActionCapability",
+    "ProposeSceneActionCapability",
     "SceneListCapability",
     "SetDevicePropertyCapability",
 ]

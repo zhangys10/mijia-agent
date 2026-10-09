@@ -87,6 +87,20 @@ test("write scopes require the console grant to match the exact message and idem
   assert.equal(pythonCalls, 0);
 });
 
+test("read-only proposal tokens still bind the exact message before Python runs", async t => {
+  const { context } = fixture();
+  let pythonCalls = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    if (url.includes("console.example")) return Response.json({ ok: true, principalId: "usr_test",
+      homeId: "home-test", scopes: ["ai:chat"], proposalMessageHash: await digest("different message"),
+      proposalIdempotencyKey: context.request.body.idempotencyKey });
+    pythonCalls++;
+    return Response.json({});
+  });
+  assert.equal((await onRequest(context)).status, 401);
+  assert.equal(pythonCalls, 0);
+});
+
 test("memory append failure after a successful turn neither fails the reply nor poisons the receipt", async t => {
   const { context, history } = fixture();
   let appendCalls = 0;

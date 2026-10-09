@@ -13,7 +13,6 @@ import hashlib
 import ipaddress
 import json
 import os
-import re
 import secrets
 import shutil
 import signal
@@ -494,10 +493,18 @@ def send_assistant(
     key = "local-prod-" + secrets.token_hex(16)
     print(f"Request-Key: {key}")
     request_token = token_factory(text, key) if token_factory is not None else token
+    # The local token generator binds each turn to this deterministic request
+    # id. Forward the same id to the Agent so the Console can verify the
+    # proposal grant without weakening its request binding.
+    request_id = "req_local_" + hashlib.sha256(key.encode()).hexdigest()[:24]
     try:
         response = client.post(
             base_url + "/ai/assistant",
-            headers={"Authorization": "Bearer " + request_token, "Idempotency-Key": key},
+            headers={
+                "Authorization": "Bearer " + request_token,
+                "Idempotency-Key": key,
+                "X-Request-Id": request_id,
+            },
             json=assistant_payload(text, conversation_id, home, channel),
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
@@ -895,31 +902,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         if cookie is not None:
             assert console_repo is not None
-            read_token = token
 
             def token_for_message(message: str, key: str) -> str:
-                if not re.match(
-                    r"^(?:执行|运行|启动|打开|开启|关闭|设置|run\s|activate\s|execute\s|turn\s|set\s)",
-                    message.strip(),
-                    re.IGNORECASE,
-                ):
-                    return read_token
-                try:
-                    return generate_token(
-                        console_repo,
-                        cookie,
-                        args.token_days,
-                        args.home,
-                        None,
-                        args.env_file,
-                        message,
-                        "req_local_" + hashlib.sha256(key.encode()).hexdigest()[:24],
-                        key,
-                    )
-                except CliError as error:
-                    if "did not match one exact authorized operation" in str(error):
-                        return read_token
-                    raise
+                return generate_token(
+                    console_repo,
+                    cookie,
+                    args.token_days,
+                    args.home,
+                    None,
+                    args.env_file,
+                    message,
+                    "req_local_" + hashlib.sha256(key.encode()).hexdigest()[:24],
+                    key,
+                )
 
             token_factory = token_for_message
         ensure_port_available(args.host, args.port)
