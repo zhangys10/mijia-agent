@@ -83,6 +83,13 @@ export async function authorize(context: Context) {
       || authorization.actionMessageHash !== await digest(message)
       || authorization.actionIdempotencyKey !== idempotencyKey) throw new Error("AI_UNAUTHENTICATED");
   }
+  if (authorization.proposalMessageHash !== undefined || authorization.proposalIdempotencyKey !== undefined) {
+    const message = required(body.message, 500);
+    const idempotencyKey = required(body.idempotencyKey, 128);
+    if (idempotencyKey.length < 16
+      || authorization.proposalMessageHash !== await digest(message)
+      || authorization.proposalIdempotencyKey !== idempotencyKey) throw new Error("AI_UNAUTHENTICATED");
+  }
   const scopedId = `agent_${(await digest(`${conversationId}:${principalId}:${homeId}`)).slice(0, 24)}`;
   return { body, conversationId, scopedId, principalId, homeId, requestId, automationToken, scopes, store: context.store };
 }

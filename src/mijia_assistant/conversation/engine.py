@@ -18,7 +18,9 @@ from mijia_assistant.models import (
 )
 from mijia_assistant.providers.base import ModelProvider
 
-from .policy import needs_weather_location_clarification
+from .policy import (
+    needs_weather_location_clarification,
+)
 from .prompt import SYSTEM_PROMPT
 
 MAX_REFERENCE_CHARS = 9000
@@ -187,7 +189,15 @@ class ConversationEngine:
                         )
                     except (TypeError, ValueError):
                         raise AssistantError("INVALID_TOOL_ARGUMENTS", 400) from None
-                    cache_key = (call.name, arguments_key)
+                    # Catalogs are immutable snapshots within one turn. Reuse
+                    # the first successful lookup even if the model repeats it
+                    # with a different filter instead of paying for a second
+                    # discovery and expanding the prompt again.
+                    cache_key = (
+                        (call.name, "catalog")
+                        if call.name in {"list_device_controls", "list_scenes"}
+                        else (call.name, arguments_key)
+                    )
                 reused_read = bool(cache_key and cache_key in read_results)
                 result = read_results.get(cache_key) if cache_key else None
                 if result is None:
@@ -309,7 +319,12 @@ class ConversationEngine:
     ) -> AssistantResponse:
         chinese = ctx.locale.startswith("zh")
         weather = tool_name == "get_weather"
-        action = tool_name in {"activate_scene", "set_device_property"}
+        action = tool_name in {
+            "activate_scene",
+            "set_device_property",
+            "propose_scene_action",
+            "propose_device_action",
+        }
         if action:
             action_messages = {
                 "AI_SCENE_EXECUTION_DISABLED": "场景执行尚未开放。",

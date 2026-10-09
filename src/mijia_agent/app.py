@@ -19,6 +19,8 @@ from mijia_assistant.capabilities import (
     DeviceControlListCapability,
     DeviceStatusCapability,
     HomeEnvironmentCapability,
+    ProposeDeviceActionCapability,
+    ProposeSceneActionCapability,
     SceneListCapability,
     SetDevicePropertyCapability,
 )
@@ -61,6 +63,8 @@ def create_lifespan(
                 DeviceStatusCapability(console_tools),
                 SceneListCapability(console_tools),
                 DeviceControlListCapability(console_tools),
+                ProposeSceneActionCapability(console_tools),
+                ProposeDeviceActionCapability(console_tools),
                 ActivateSceneCapability(console_tools),
                 SetDevicePropertyCapability(console_tools),
             ]
@@ -142,7 +146,10 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                     or authorization.get("actionIdempotencyKey") != idempotency_key
                 ):
                     raise AssistantError("UNAUTHORIZED", 401)
-            timeout = 12 if body.channel == "siri" else 20
+            # A proposal turn can require discovery, catalog projection, and
+            # one terminal proposal call. Leave enough wall time for three
+            # bounded Gateway requests while retaining the EdgeOne deadline.
+            timeout = 15 if body.channel == "siri" else 40
             context = AssistantContext(
                 request_id=request_id,
                 conversation_id=conversation_id,
@@ -230,7 +237,9 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                     "get_device_status": "get_device_status",
                     "list_scenes": "list_scenes",
                     "activate_scene": "activate_scene",
+                    "propose_scene_action": "activate_scene",
                     "set_device_property": "set_device_property",
+                    "propose_device_action": "set_device_property",
                 }.get(event.name, "none")
                 if event
                 else "none"
@@ -252,7 +261,14 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 else result.answer.text,
                 "intent": intent,
                 "toolEvents": [
-                    {"name": item.name, "status": item.status} for item in result.tool_events
+                    {
+                        "name": {
+                            "propose_scene_action": "activate_scene",
+                            "propose_device_action": "set_device_property",
+                        }.get(item.name, item.name),
+                        "status": item.status,
+                    }
+                    for item in result.tool_events
                 ],
                 "usage": {
                     "promptTokens": result.usage.prompt_tokens,

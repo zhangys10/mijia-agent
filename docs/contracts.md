@@ -73,16 +73,18 @@ token only after a home capability is selected.
 | `list_scenes` | `{}` | `{ "scenes": [{ "alias", "name", "description", "actionCount", "revision", "actionSummaries" }] }` |
 | `get_home_status` | `{}` | Read-only normalized environment snapshot (below); requires `ai:chat` only |
 | `get_device_status` | `{}` | Read-only per-room device on/off snapshot (below); requires `ai:chat` only |
-| `list_device_controls` | `{}` | Bounded safe properties for explicitly selected devices, using opaque aliases |
-| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Available only for an exact server-granted scene command |
-| `set_device_property` | `{ "deviceId": "entity_<opaque-alias>", "operationId": "op_<opaque-alias>", "revision": "rev_<sha256-prefix>", "value": true }` | Available only for an exact server-granted safe-property command |
+| `list_device_controls` | `{ "query"?: "device name" }` | Bounded safe properties for explicitly selected devices, using opaque aliases; optional name filter |
+| `propose_scene_action` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Validates an LLM-selected approved scene and returns a sealed action token to Python only |
+| `propose_device_action` | `{ "deviceId": "entity_<opaque-alias>", "operations": [{ "operationId", "revision", "value" }] }` | Validates one selected device and up to four safe changes; returns a sealed action token to Python only |
+| `activate_scene` | `{ "sceneId": "scene_<opaque-alias>", "revision": "rev_<sha256-prefix>" }` | Terminal write using the sealed action token; not exposed to the model in the proposal flow |
+| `set_device_property` | `{ "deviceId": "entity_<opaque-alias>", "operations": [{ "operationId", "revision", "value" }] }` | Terminal write using the sealed action token; not exposed to the model in the proposal flow |
 
 Scene discovery returns a content revision hash and normalized action summaries. The
 console exposes enabled manual scenes through individual approval or a confirmed
 home-level approval bypass; no static low-risk scene classification is applied. Bypass
 also covers future enabled scenes and scene edits in that home. The deprecated command
 router rejects every write before dispatch. The canonical assistant registers an action
-capability only when the console-issued token grants the exact current request. Aliases,
+capability only after the console validates its proposal for the exact current request. Aliases,
 summaries, revisions, and client idempotency keys are not authorization. Keep both execution
 flags unset until the deployed operational gates in `docs/TODO.md` pass.
 When enabled, a positive Xiaomi scene-run acknowledgment is reported as “request

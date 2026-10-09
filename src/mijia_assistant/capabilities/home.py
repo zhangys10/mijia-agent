@@ -378,6 +378,9 @@ class DeviceStatusCapability(_HomeReadCapability):
 
 
 class SceneListCapability(_HomeReadCapability):
+    # Scene catalog lookup is already exposure-filtered by the Console and can
+    # be selected directly for a write proposal without a manifest round trip.
+    requires_home_manifest = False
     name = "list_scenes"
     description = "List the approved enabled manual scenes for this home."
     input_schema: ClassVar[dict] = {
@@ -407,17 +410,27 @@ class SceneListCapability(_HomeReadCapability):
             {
                 "alias": scene.alias,
                 "name": scene.name,
-                "description": scene.description,
                 "revision": scene.revision,
-                "actionCount": scene.actionCount,
-                "actionSummaries": [item.model_dump() for item in scene.actionSummaries],
             }
             for scene in scenes[:40]
+        ]
+        # Scene activation only needs the opaque alias, display name, and
+        # revision. Keeping action details out of the model context avoids a
+        # large result for homes with many scenes while preserving the richer
+        # client projection below.
+        client_scenes = [
+            {
+                **item,
+                "description": scene.description,
+                "actionCount": scene.actionCount,
+                "actionSummaries": [entry.model_dump() for entry in scene.actionSummaries],
+            }
+            for item, scene in zip(content, scenes[:40], strict=True)
         ]
         return CapabilityResult(
             status="success",
             model_content={"scenes": content},
-            client_data={"type": "scenes", "scenes": content},
+            client_data={"type": "scenes", "scenes": client_scenes},
             display_text="当前没有已授权的可用场景。"
             if not content
             else "已读取当前家庭的可用场景。",
@@ -425,11 +438,18 @@ class SceneListCapability(_HomeReadCapability):
 
 
 class DeviceControlListCapability(_HomeReadCapability):
+    # The Console performs the current exposure check and returns only opaque,
+    # selected-device controls, so this can be called directly for writes.
+    requires_home_manifest = False
     name = "list_device_controls"
-    description = "List safe controls for devices explicitly enabled for assistant operations."
+    description = (
+        "Look up selected devices and safe controls exactly once per turn. "
+        "Pass the user's device name as query when identifiable; after a successful result, "
+        "reuse it and do not call this tool again."
+    )
     input_schema: ClassVar[dict] = {
         "type": "object",
-        "properties": {},
+        "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 100}},
         "additionalProperties": False,
     }
 
@@ -441,19 +461,23 @@ class DeviceControlListCapability(_HomeReadCapability):
         )
 
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
-        if args:
+        if set(args) - {"query"} or (
+            "query" in args
+            and (not isinstance(args["query"], str) or not 1 <= len(args["query"]) <= 100)
+        ):
             raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
         try:
             payload = await self.tools.call(
-                self._token(ctx), ctx.request_id, self.name, ctx.home_selector, {}
+                self._token(ctx), ctx.request_id, self.name, ctx.home_selector, args
             )
             devices = TypeAdapter(list[AgentDeviceControl]).validate_python(payload.get("devices"))
         except AgentError as error:
             raise AssistantError(error.code, error.status, error.diagnostic_code) from None
         except (TypeError, ValueError, ValidationError):
             raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502) from None
-        visible_devices = devices[:1] if "device:operate" in ctx.scopes else devices
-        content = _bounded_device_controls(visible_devices)
+        # Keep the model projection bounded; callers can request a narrower
+        # device-name query when the selected target is not in the first page.
+        content = _bounded_device_controls(devices)
         return CapabilityResult(
             status="success",
             model_content={"devices": content},
@@ -527,11 +551,23 @@ class SetDevicePropertyCapability(_HomeReadCapability):
         "additionalProperties": False,
         "properties": {
             "deviceId": {"type": "string", "pattern": "^entity_[a-f0-9]{32}$"},
-            "operationId": {"type": "string", "pattern": "^op_[a-f0-9]{24}$"},
-            "revision": {"type": "string", "pattern": "^rev_[a-f0-9]{24}$"},
-            "value": {"type": ["boolean", "number", "string"]},
+            "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "operationId": {"type": "string", "pattern": "^op_[a-f0-9]{24}$"},
+                        "revision": {"type": "string", "pattern": "^rev_[a-f0-9]{24}$"},
+                        "value": {"type": ["boolean", "number", "string"]},
+                    },
+                    "required": ["operationId", "revision", "value"],
+                },
+            },
         },
-        "required": ["deviceId", "operationId", "revision", "value"],
+        "required": ["deviceId", "operations"],
     }
 
     async def is_available(self, ctx: AssistantContext) -> bool:
@@ -545,9 +581,19 @@ class SetDevicePropertyCapability(_HomeReadCapability):
         )
 
     async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
-        if set(args) != {"deviceId", "operationId", "revision", "value"} or type(
-            args.get("value")
-        ) not in {bool, int, float, str}:
+        operations = args.get("operations")
+        if (
+            set(args) != {"deviceId", "operations"}
+            or not isinstance(args.get("deviceId"), str)
+            or not isinstance(operations, list)
+            or not 1 <= len(operations) <= 4
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"operationId", "revision", "value"}
+                or type(item.get("value")) not in {bool, int, float, str}
+                for item in operations
+            )
+        ):
             raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
         try:
             result = await self.tools.call(
@@ -571,4 +617,116 @@ class SetDevicePropertyCapability(_HomeReadCapability):
             display_text=str(result.get("message") or "设备操作请求已提交，设备状态尚未回读。"),
             client_data={"type": "action", "action": "set_device_property", "status": "submitted"},
             is_terminal=True,
+        )
+
+
+class ProposeSceneActionCapability(ActivateSceneCapability):
+    requires_home_manifest = False
+    name = "propose_scene_action"
+    description = "Propose one approved scene activation from the catalog for the current user request. The server validates and executes it; never invent an alias."
+
+    async def is_available(self, ctx: AssistantContext) -> bool:
+        return await _HomeReadCapability.is_available(self, ctx)
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        if set(args) != {"sceneId", "revision"}:
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            proposal = await self.tools.call(
+                self._token(ctx),
+                ctx.request_id,
+                self.name,
+                ctx.home_selector,
+                args,
+                ctx.idempotency_key,
+            )
+        except AgentError as error:
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        action_token = proposal.get("actionToken")
+        if not isinstance(action_token, str):
+            raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502)
+        try:
+            result = await self.tools.call(
+                action_token,
+                ctx.request_id,
+                "activate_scene",
+                ctx.home_selector,
+                args,
+                ctx.idempotency_key,
+            )
+        except AgentError as error:
+            if error.code in {"AI_EXECUTION_STATUS_UNKNOWN", "MI_CLOUD_ERROR", "DEVICE_TIMEOUT"}:
+                return CapabilityResult(
+                    status="outcome_unknown",
+                    is_terminal=True,
+                    display_text="场景操作结果不确定，请检查设备状态；不要自动重试。",
+                )
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        return CapabilityResult(
+            status="success",
+            is_terminal=True,
+            display_text=str(result.get("message") or "场景执行请求已提交。"),
+            client_data={"type": "action", "action": "activate_scene", "status": "submitted"},
+        )
+
+
+class ProposeDeviceActionCapability(SetDevicePropertyCapability):
+    requires_home_manifest = False
+    name = "propose_device_action"
+    description = "Propose one selected device's safe property changes using exact opaque catalog references and values. The server validates and executes them."
+
+    async def is_available(self, ctx: AssistantContext) -> bool:
+        return await _HomeReadCapability.is_available(self, ctx)
+
+    async def invoke(self, ctx: AssistantContext, args: dict) -> CapabilityResult:
+        operations = args.get("operations")
+        if (
+            set(args) != {"deviceId", "operations"}
+            or not isinstance(args.get("deviceId"), str)
+            or not isinstance(operations, list)
+            or not 1 <= len(operations) <= 4
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"operationId", "revision", "value"}
+                or type(item.get("value")) not in {bool, int, float, str}
+                for item in operations
+            )
+        ):
+            raise AssistantError("INVALID_TOOL_ARGUMENTS", 400)
+        try:
+            proposal = await self.tools.call(
+                self._token(ctx),
+                ctx.request_id,
+                self.name,
+                ctx.home_selector,
+                args,
+                ctx.idempotency_key,
+            )
+        except AgentError as error:
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        action_token = proposal.get("actionToken")
+        if not isinstance(action_token, str):
+            raise AssistantError("HOME_CONTEXT_UNAVAILABLE", 502)
+        try:
+            result = await self.tools.call(
+                action_token,
+                ctx.request_id,
+                "set_device_property",
+                ctx.home_selector,
+                args,
+                ctx.idempotency_key,
+            )
+        except AgentError as error:
+            if error.code in {"AI_EXECUTION_STATUS_UNKNOWN", "MI_CLOUD_ERROR", "DEVICE_TIMEOUT"}:
+                return CapabilityResult(
+                    status="outcome_unknown",
+                    is_terminal=True,
+                    display_text="设备操作结果不确定，请检查设备状态；不要自动重试。",
+                )
+            raise AssistantError(error.code, error.status, error.diagnostic_code) from None
+        return CapabilityResult(
+            status="success",
+            is_terminal=True,
+            display_text=str(result.get("message") or "设备操作请求已提交。"),
+            client_data={"type": "action", "action": "set_device_property", "status": "submitted"},
         )

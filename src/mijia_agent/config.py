@@ -34,7 +34,7 @@ class Settings:
     console_url: str
     model: str
     allowed_models: tuple[str, ...]
-    timeout_ms: int = 5000
+    timeout_ms: int = 10000
     assistant_max_output_tokens: int = 512
     caiyun_base_url: str = ""
     caiyun_app_key: str = field(repr=False, default="")
@@ -97,7 +97,7 @@ class Settings:
                 for x in env.get("AI_GATEWAY_ALLOWED_MODELS", model).split(",")
                 if x.strip()
             ),
-            timeout_ms=int(env.get("AI_GATEWAY_TIMEOUT_MS", "5000")),
+            timeout_ms=int(env.get("AI_GATEWAY_TIMEOUT_MS", "10000")),
             assistant_max_output_tokens=int(env.get("AI_ASSISTANT_MAX_OUTPUT_TOKENS", "512")),
             caiyun_base_url=env.get("AI_CAIYUN_BASE_URL", ""),
             caiyun_app_key=env.get("AI_CAIYUN_APP_KEY", ""),

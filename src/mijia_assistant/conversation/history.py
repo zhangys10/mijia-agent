@@ -18,6 +18,12 @@ def model_history_answer(response: AssistantResponse) -> str:
     """Return conversational context without persisting a tool result or live reading."""
     if response.outcome == "clarification":
         return response.answer.text[:MAX_HISTORY_CONTENT]
+    if response.outcome == "action_result":
+        # Action replies contain only the sanitized display name and operation
+        # acknowledged by the trusted executor. Retaining that summary lets the
+        # model resolve conversational references without storing tool arguments,
+        # opaque aliases, revisions, or device identifiers.
+        return response.answer.text[:MAX_HISTORY_CONTENT]
     if response.tool_events:
         return "Answered the user's previous request using a fresh lookup."
     return response.answer.text[:MAX_HISTORY_CONTENT]
@@ -45,6 +51,8 @@ class ConversationRepository:
 
     @staticmethod
     def _key(ctx: AssistantContext) -> str:
-        token = ctx.automation_token.get_secret_value() if ctx.automation_token else ""
-        material = "\x00".join((token, ctx.home_selector or "", ctx.conversation_id))
+        # Automation tokens are intentionally short-lived and may rotate on
+        # every CLI/web request. They authenticate the turn, but must not split
+        # one conversation's bounded, sanitized history into separate stores.
+        material = "\x00".join((ctx.home_selector or "", ctx.conversation_id))
         return hashlib.sha256(material.encode()).hexdigest()

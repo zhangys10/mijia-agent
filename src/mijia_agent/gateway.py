@@ -86,7 +86,13 @@ class Gateway:
             self._log_failure(context, "AI_GATEWAY_RATE_LIMITED", started)
             raise AgentError("AI_GATEWAY_RATE_LIMITED", 429)
         if response.status_code != 200 or len(response.content) > 65536:
-            self._log_failure(context, "AI_GATEWAY_UNAVAILABLE", started)
+            self._log_failure(
+                context,
+                "AI_GATEWAY_UNAVAILABLE",
+                started,
+                http_status=response.status_code,
+                response_bytes=len(response.content),
+            )
             raise AgentError("AI_GATEWAY_UNAVAILABLE")
         try:
             body = response.json()
@@ -129,12 +135,19 @@ class Gateway:
         )
         return body, usage
 
-    def _log_failure(self, context: dict, code: str, started: float) -> None:
+    def _log_failure(
+        self,
+        context: dict,
+        code: str,
+        started: float,
+        **metadata: int,
+    ) -> None:
         self.logger.log(
             {
                 "event": "llm_call_failed",
                 "context": context,
                 "code": code,
+                **metadata,
                 "latencyMs": round((time.monotonic() - started) * 1000),
             }
         )

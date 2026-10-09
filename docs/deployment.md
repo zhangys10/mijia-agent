@@ -16,7 +16,7 @@
 | `AI_PYTHON_INTERNAL_SECRET` | No | Sends | Verifies |
 | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_MODEL` | Retire after cutover | Not needed | Yes |
 | `AI_GATEWAY_ALLOWED_MODELS` | — | — | Optional; defaults to configured model only |
-| `AI_GATEWAY_TIMEOUT_MS` | — | — | Optional Gateway request timeout |
+| `AI_GATEWAY_TIMEOUT_MS` | — | — | Optional Gateway request timeout; defaults to 10000 ms and must remain below the assistant turn budget |
 | `AI_ASSISTANT_MAX_OUTPUT_TOKENS` | — | — | Canonical assistant completion limit; defaults 512 |
 | `AI_CAIYUN_BASE_URL`, `AI_CAIYUN_APP_KEY`, `AI_CAIYUN_APP_SECRET` | — | — | Required together to enable Caiyun Weather v2.6’s signed App Key/App Secret mode; no token auth or provider fallback |
 | `AI_AMAP_BASE_URL`, `AI_AMAP_API_KEY`, `AI_AMAP_PRIVATE_KEY` | — | — | Required together with Caiyun to resolve mainland-China city and district names; the private key is used only server-side to generate AMap `sig` |
