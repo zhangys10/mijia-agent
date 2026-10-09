@@ -410,17 +410,27 @@ class SceneListCapability(_HomeReadCapability):
             {
                 "alias": scene.alias,
                 "name": scene.name,
-                "description": scene.description,
                 "revision": scene.revision,
-                "actionCount": scene.actionCount,
-                "actionSummaries": [item.model_dump() for item in scene.actionSummaries],
             }
             for scene in scenes[:40]
+        ]
+        # Scene activation only needs the opaque alias, display name, and
+        # revision. Keeping action details out of the model context avoids a
+        # large result for homes with many scenes while preserving the richer
+        # client projection below.
+        client_scenes = [
+            {
+                **item,
+                "description": scene.description,
+                "actionCount": scene.actionCount,
+                "actionSummaries": [entry.model_dump() for entry in scene.actionSummaries],
+            }
+            for item, scene in zip(content, scenes[:40], strict=True)
         ]
         return CapabilityResult(
             status="success",
             model_content={"scenes": content},
-            client_data={"type": "scenes", "scenes": content},
+            client_data={"type": "scenes", "scenes": client_scenes},
             display_text="当前没有已授权的可用场景。"
             if not content
             else "已读取当前家庭的可用场景。",
