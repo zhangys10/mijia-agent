@@ -148,3 +148,18 @@ store need validation. No exactly-once hardware guarantee is claimed.
 - No locks, gas, access control, camera workflows or arbitrary MIoT tools.
 - Reminders default to notifications/options; long-term habits produce suggestions with explicit user consent.
 - No new database is imposed by this extraction. Durable executor and reminder storage remains an explicit design gate.
+
+## Phase 1 climate profile learning
+
+Climate learning is a read-only sidecar. The authenticated Console owns Xiaomi reads,
+opaque sensor/actuator bindings, 90-day history, review state, and the
+`mijia-ai-climate-memory-v1` Blob namespace. The visible 3D page requests a sample every
+two minutes; the server batches explicit MIoT properties and accepts an external change
+only after two matching samples. Confirmed Console writes may be attributed only after
+matching readback. Python receives bounded observations containing only opaque room and
+observation references and deterministically derives four time windows by five ambient
+temperature bands. This route never invokes the Gateway and grants no device authority.
+One room may map to multiple opaque controllers from anywhere in the home, and one shared
+controller may be mapped to multiple rooms. Derivation separates each room/controller pair.
+Periodic unchanged device-state points remain Console-owned history and are not derivation
+evidence; only accepted manual-change observations cross the Agent adapter.
