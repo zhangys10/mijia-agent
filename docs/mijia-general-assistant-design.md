@@ -1139,3 +1139,27 @@ deployed concurrency and real-target checks pass.
 ---
 
 This document supersedes the scene-router direction for future development. Existing migration and steward-alignment documents remain historical evidence until they are archived or rewritten.
+
+## 26. Phase 1 adaptive climate profiles
+
+The Console may learn review-only climate preferences from explicit room sensor/actuator
+bindings. Its visible 3D view samples every two minutes and recognizes confirmed Console
+changes or stable external changes. Console Blob, not model history, stores private
+bindings, samples, observations, derivations, review pointers and exclusions for 90 days.
+Python deterministically aggregates time windows and ambient bands without a Gateway call.
+Sparse cells remain insufficient evidence; profiles never authorize climate writes.
+Controller mappings are many-to-many: a room may observe multiple controllers regardless
+of their Xiaomi room, and a shared boiler may participate in every affected room profile.
+The Console Environment page also retains periodic unchanged status points for review, but
+these points do not become preference examples without a confirmed manual change.
+For review, the Console selects the Agent-derived cell matching the current time window and
+latest room temperature and displays one final target/mode recommendation beside that
+room's history. It remains advisory and cannot dispatch an action.
+The Console reads controller on/off state and displays it as context. A boiler is eligible
+only when it exposes an explicit thermostat or room-heating service. Target, mode and
+on/off must all come from that same service; domestic-hot-water, water-heater and separate
+boiler-controller fallbacks are forbidden.
+The capability revision includes the Console's selection-policy version. If that revision
+changes, samples, observations, derived cells and review state for the affected opaque
+room/controller pair are discarded before new sampling, preventing an old water-heater
+value from remaining visible as thermostat history.

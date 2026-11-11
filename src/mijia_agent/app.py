@@ -29,6 +29,7 @@ from mijia_assistant.conversation.history import model_history_answer
 from mijia_assistant.models import AssistantContext, AssistantError, ModelMessage
 from mijia_assistant.providers import OpenAICompatibleProvider
 
+from .climate_profile import ClimateProfileRequest, derive_climate_profile
 from .config import Settings
 from .console_tools import ConsoleAgentTools
 from .gateway import Gateway
@@ -323,6 +324,26 @@ def register_routes(app: FastAPI, config: Settings) -> FastAPI:
                 502,
                 headers=headers,
             )
+
+    @app.post("/internal/v1/climate-profile/derive")
+    async def climate_profile_derive(request: Request):
+        headers = {"Cache-Control": "no-store"}
+        expected = "Bearer " + config.internal_secret
+        if not hmac.compare_digest(
+            request.headers.get("authorization", "").encode(), expected.encode()
+        ):
+            return JSONResponse({"code": "AI_UNAUTHENTICATED"}, 401, headers=headers)
+        try:
+            raw = await request.body()
+            if len(raw) > 65536:
+                raise ValueError("oversized")
+            body = ClimateProfileRequest.model_validate_json(raw)
+            result = derive_climate_profile(body)
+            return JSONResponse(result.model_dump(mode="json"), headers=headers)
+        except (ValueError, ValidationError):
+            return JSONResponse({"code": "AI_INVALID_REQUEST"}, 400, headers=headers)
+        except Exception:  # noqa: BLE001 -- never expose derivation internals.
+            return JSONResponse({"code": "AI_AGENT_UNAVAILABLE"}, 502, headers=headers)
 
     return app
 

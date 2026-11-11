@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { onRequest } from "../agents/ai-home/index.ts";
 import { onRequest as deleteConversation } from "../agents/ai-home/delete.ts";
 import { digest } from "../agents/ai-home/shared.ts";
+import { onRequest as deriveClimateProfile } from "../agents/climate-profile/index.ts";
 
 function fixture() {
   const state = new Map();
@@ -24,6 +25,21 @@ function fixture() {
   } };
   return { context, state, history };
 }
+
+test("climate profile adapter forwards only identifier-free bounded observations", async t => {
+  const { context } = fixture();
+  context.conversation_id = undefined;
+  context.store = undefined;
+  context.request.body = { timezone: "Asia/Shanghai", observations: [] };
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.match(String(url), /internal\/v1\/climate-profile\/derive$/);
+    assert.equal(options.headers.Authorization, `Bearer ${context.env.AI_PYTHON_INTERNAL_SECRET}`);
+    return Response.json({ version: "1", revision: `climate_${"a".repeat(24)}`, generatedAt: new Date().toISOString(), rooms: [] });
+  });
+  assert.equal((await deriveClimateProfile(context)).status, 200);
+  context.request.body = { homeId: "private-home", observations: [] };
+  assert.equal((await deriveClimateProfile(context)).status, 400);
+});
 
 test("Makers adapter forwards a bounded turn, stores history, and replays without a new model call", async t => {
   const { context, history } = fixture();

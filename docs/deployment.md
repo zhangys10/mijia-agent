@@ -112,3 +112,11 @@ ledger to reset; restoring enforcement requires a verified local KV configuratio
 
 New Makers project histories are separate; no automatic cross-project memory migration
 is promised. Principal rotation changes user IDs and requires an explicit quota/history plan.
+
+## Climate profile deployment
+
+The Console uses Blob store `mijia-ai-climate-memory-v1` (override with
+`AI_CLIMATE_MEMORY_STORE`) plus the existing Agent URL and internal secret. Deploy Console
+and Agent routes together; otherwise observations remain retryable and derivation is shown
+as pending. Phase 1 has no climate execution flag. Follow
+`docs/climate-profile-phase-1-validation.md` before enabling sampling.
