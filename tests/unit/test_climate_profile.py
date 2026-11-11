@@ -88,9 +88,7 @@ def test_setpoint_only_controller_learns_temperature_without_inventing_mode():
         }
         for i in range(6)
     ]
-    result = derive_climate_profile(
-        ClimateProfileRequest.model_validate({"observations": values})
-    )
+    result = derive_climate_profile(ClimateProfileRequest.model_validate({"observations": values}))
     cell = next(cell for cell in result.rooms[0].cells if cell.status == "learned")
     assert cell.derivedTargetTemperature is not None
     assert cell.derivedMode is None
@@ -99,13 +97,19 @@ def test_setpoint_only_controller_learns_temperature_without_inventing_mode():
 def test_http_contract_rejects_identifiers_and_authenticates():
     config = settings()
     client = TestClient(create_app(config))
-    assert client.post("/internal/v1/climate-profile/derive", json={"observations": []}).status_code == 401
+    assert (
+        client.post("/internal/v1/climate-profile/derive", json={"observations": []}).status_code
+        == 401
+    )
     headers = {"Authorization": f"Bearer {config.internal_secret}"}
-    assert client.post(
-        "/internal/v1/climate-profile/derive",
-        headers=headers,
-        json={"observations": [], "homeId": "must-not-enter-python"},
-    ).status_code == 400
+    assert (
+        client.post(
+            "/internal/v1/climate-profile/derive",
+            headers=headers,
+            json={"observations": [], "homeId": "must-not-enter-python"},
+        ).status_code
+        == 400
+    )
     response = client.post(
         "/internal/v1/climate-profile/derive", headers=headers, json={"observations": []}
     )

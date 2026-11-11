@@ -117,9 +117,7 @@ def derive_climate_profile(
     for room_ref, actuator_ref in room_actuators:
         cells: list[ClimateProfileCell] = []
         room_items = [
-            item
-            for item in usable
-            if item.roomRef == room_ref and item.actuatorRef == actuator_ref
+            item for item in usable if item.roomRef == room_ref and item.actuatorRef == actuator_ref
         ]
         for time_window in TIME_WINDOWS:
             for band_name, low, high in AMBIENT_BANDS:
@@ -141,7 +139,13 @@ def derive_climate_profile(
                     modes = Counter(item.mode for item in items if item.mode is not None)
                     if modes:
                         top_mode, top_count = modes.most_common(1)[0]
-                        mode = top_mode if learned and top_count >= 3 and list(modes.values()).count(top_count) == 1 else None
+                        mode = (
+                            top_mode
+                            if learned
+                            and top_count >= 3
+                            and list(modes.values()).count(top_count) == 1
+                            else None
+                        )
                     else:
                         mode = None
                     confidence = min(1.0, (len(items) / 10) * min(1.0, len(dates) / 3))
@@ -171,11 +175,7 @@ def derive_climate_profile(
                         explanation=explanation,
                     )
                 )
-        rooms.append(
-            ClimateRoomProfile(
-                roomRef=room_ref, actuatorRef=actuator_ref, cells=cells
-            )
-        )
+        rooms.append(ClimateRoomProfile(roomRef=room_ref, actuatorRef=actuator_ref, cells=cells))
     canonical = json.dumps(
         [room.model_dump(mode="json") for room in rooms],
         ensure_ascii=False,
@@ -183,6 +183,4 @@ def derive_climate_profile(
         separators=(",", ":"),
     )
     revision = "climate_" + hashlib.sha256(canonical.encode()).hexdigest()[:24]
-    return ClimateProfileResponse(
-        revision=revision, generatedAt=generated_at, rooms=rooms
-    )
+    return ClimateProfileResponse(revision=revision, generatedAt=generated_at, rooms=rooms)
