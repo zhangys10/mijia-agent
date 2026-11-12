@@ -138,9 +138,7 @@ def derive_climate_profile(
     generated_at = now or datetime.now(timezone.utc)
     usable = [item for item in request.observations if not item.excluded]
     history = request.historyPoints
-    room_actuators = sorted(
-        {(item.roomRef, item.actuatorRef) for item in [*usable, *history]}
-    )
+    room_actuators = sorted({(item.roomRef, item.actuatorRef) for item in [*usable, *history]})
     rooms: list[ClimateRoomProfile] = []
     for room_ref, actuator_ref in room_actuators:
         cells: list[ClimateProfileCell] = []
@@ -182,30 +180,23 @@ def derive_climate_profile(
                         top_mode, top_count = modes.most_common(1)[0]
                         mode = (
                             top_mode
-                            if top_count >= 3
-                            and list(modes.values()).count(top_count) == 1
+                            if top_count >= 3 and list(modes.values()).count(top_count) == 1
                             else None
                         )
                     else:
                         mode = None
-                    confidence = min(
-                        1.0, (len(items) / 10) * min(1.0, len(manual_dates) / 3)
-                    )
+                    confidence = min(1.0, (len(items) / 10) * min(1.0, len(manual_dates) / 3))
                     first, last = min(item.capturedAt for item in items), newest
                     status = "learned"
                     support_count = len(items)
                     dates = manual_dates
-                    explanation = (
-                        f"基于 {len(items)} 次手动设置、{len(manual_dates)} 个日期计算。"
-                    )
+                    explanation = f"基于 {len(items)} 次手动设置、{len(manual_dates)} 个日期计算。"
                 elif evidence:
                     newest = max(item.capturedAt for item in evidence)
                     weighted_targets: list[tuple[float, float]] = []
                     weighted_modes: Counter[str] = Counter()
                     for item in evidence:
-                        age_days = max(
-                            0.0, (newest - item.capturedAt).total_seconds() / 86400
-                        )
+                        age_days = max(0.0, (newest - item.capturedAt).total_seconds() / 86400)
                         source_weight = 4.0 if item in items else 1.0
                         power_weight = 0.5 if item.powerOn is False else 1.0
                         weight = source_weight * power_weight * math.pow(0.5, age_days / 30)
@@ -217,8 +208,7 @@ def derive_climate_profile(
                         ranked_modes = weighted_modes.most_common()
                         mode = (
                             ranked_modes[0][0]
-                            if len(ranked_modes) == 1
-                            or ranked_modes[0][1] > ranked_modes[1][1]
+                            if len(ranked_modes) == 1 or ranked_modes[0][1] > ranked_modes[1][1]
                             else None
                         )
                     else:
