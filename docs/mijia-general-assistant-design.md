@@ -1147,14 +1147,18 @@ bindings. Its visible 3D view samples every two minutes and recognizes confirmed
 changes or stable external changes. Console Blob, not model history, stores private
 bindings, samples, observations, derivations, review pointers and exclusions for 90 days.
 Python deterministically aggregates time windows and ambient bands without a Gateway call.
-Sparse cells remain insufficient evidence; profiles never authorize climate writes.
+Periodic status points may produce a lower-confidence provisional target/mode suggestion;
+six accepted manual observations across three dates are still required for a learned cell.
+Profiles never authorize climate writes.
 Controller mappings are many-to-many: a room may observe multiple controllers regardless
 of their Xiaomi room, and a shared boiler may participate in every affected room profile.
-The Console Environment page also retains periodic unchanged status points for review, but
-these points do not become preference examples without a confirmed manual change.
+The Console Environment page retains periodic unchanged status points for review and sends
+a bounded identifier-free subset into deterministic derivation. Manual changes receive
+higher weight than periodic points.
 For review, the Console selects the Agent-derived cell matching the current time window and
 latest room temperature and displays one final target/mode recommendation beside that
-room's history. It remains advisory and cannot dispatch an action.
+room's history. Mode-capable AC recommendations include the observed mode, not only the
+temperature. The recommendation remains advisory and cannot dispatch an action.
 The Console reads controller on/off state and displays it as context. A boiler is eligible
 only when it exposes an explicit thermostat or room-heating service. Target, mode and
 on/off must all come from that same service; domestic-hot-water, water-heater and separate
