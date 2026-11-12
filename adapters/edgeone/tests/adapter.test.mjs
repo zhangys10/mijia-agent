@@ -30,10 +30,11 @@ test("climate profile adapter forwards only identifier-free bounded observations
   const { context } = fixture();
   context.conversation_id = undefined;
   context.store = undefined;
-  context.request.body = { timezone: "Asia/Shanghai", observations: [] };
+  context.request.body = { timezone: "Asia/Shanghai", observations: [], historyPoints: [] };
   t.mock.method(globalThis, "fetch", async (url, options) => {
     assert.match(String(url), /internal\/v1\/climate-profile\/derive$/);
     assert.equal(options.headers.Authorization, `Bearer ${context.env.AI_PYTHON_INTERNAL_SECRET}`);
+    assert.deepEqual(JSON.parse(options.body), context.request.body);
     return Response.json({ version: "1", revision: `climate_${"a".repeat(24)}`, generatedAt: new Date().toISOString(), rooms: [] });
   });
   assert.equal((await deriveClimateProfile(context)).status, 200);

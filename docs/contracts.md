@@ -229,12 +229,21 @@ contract; Python is not a public endpoint.
 `POST /internal/v1/climate-profile/derive` is internal-Bearer authenticated, limited to
 64 KiB, and rejects unknown fields and identifiers. Each accepted observation has opaque
 observation and room references, temperatures, mode, local-time context, source, exclusion
-state, and previous configuration. It returns 20 deterministic cells per observed room.
-A cell needs six accepted observations across three dates; mode needs three unambiguous
-votes. The adapter rejects home, principal, DID, device, and automation-token fields.
+state, and previous configuration. A bounded `historyPoints` array carries periodic status
+samples with opaque sample/room/controller references and the same environmental context.
+It returns 20 deterministic cells per observed room. Any evidence may produce a provisional
+`suggested` target/mode; a `learned` cell still needs six accepted manual observations
+across three dates, and its mode needs three unambiguous manual votes. Manual evidence is
+weighted above periodic history. The adapter rejects home, principal, DID, device, and
+automation-token fields.
 Every observation also carries an opaque `actuatorRef`; cells are grouped by both
 `roomRef` and `actuatorRef`, allowing shared boilers and multiple local thermostats.
 `mode` may be null for a setpoint-only boiler or thermostat; derivation never fabricates it.
+For mode-capable ACs, provisional and learned results include the supported observed mode
+when the evidence has a unique winner. This remains the stable raw enum value; Console maps
+it to the sanitized MIoT choice label for display and falls back to the value only when the
+specification publishes no label. Validated setpoints span 5–80°C so high-temperature boiler
+thermostat values are not confused with or rejected as domestic-hot-water data.
 `powerOn` may be true, false, or null and is retained as context only; it never becomes a
 derived output. Console discovery admits a boiler only through an explicit thermostat or
 room-heating service and reads power from that same service; the Agent never receives a

@@ -38,6 +38,22 @@ def observation(index: int, *, mode: str = "cool", excluded: bool = False):
     }
 
 
+def history_point(index: int, *, mode: str = "cool", target: float = 24.0):
+    captured = datetime(2026, 1, 1, 8, tzinfo=timezone.utc) + timedelta(hours=index * 6)
+    return {
+        "sampleRef": f"sample_{index:024x}",
+        "roomRef": "room_" + "a" * 24,
+        "actuatorRef": "actuator_" + "b" * 24,
+        "ambientTemperature": 25.0,
+        "targetTemperature": target,
+        "mode": mode,
+        "powerOn": True,
+        "capturedAt": captured.isoformat(),
+        "localHour": 8,
+        "dayOfWeek": captured.isoweekday(),
+    }
+
+
 def test_derives_learned_cell_without_model_access():
     request = ClimateProfileRequest.model_validate(
         {"timezone": "Asia/Shanghai", "observations": [observation(i) for i in range(6)]}
@@ -92,6 +108,28 @@ def test_setpoint_only_controller_learns_temperature_without_inventing_mode():
     cell = next(cell for cell in result.rooms[0].cells if cell.status == "learned")
     assert cell.derivedTargetTemperature is not None
     assert cell.derivedMode is None
+
+
+def test_periodic_history_produces_provisional_temperature_and_ac_mode_suggestion():
+    points = [history_point(i, mode="cool", target=23.0 + i % 2) for i in range(4)]
+    result = derive_climate_profile(
+        ClimateProfileRequest.model_validate({"observations": [], "historyPoints": points})
+    )
+    cell = next(cell for cell in result.rooms[0].cells if cell.status == "suggested")
+    assert cell.derivedTargetTemperature in {23.0, 24.0}
+    assert cell.derivedMode == "cool"
+    assert cell.supportCount == 4
+    assert cell.confidence < 0.7
+
+
+def test_periodic_history_accepts_valid_boiler_thermostat_values_above_40():
+    point = history_point(0, mode="heat", target=44.0)
+    result = derive_climate_profile(
+        ClimateProfileRequest.model_validate({"observations": [], "historyPoints": [point]})
+    )
+    cell = next(cell for cell in result.rooms[0].cells if cell.status == "suggested")
+    assert cell.derivedTargetTemperature == 44.0
+    assert cell.derivedMode == "heat"
 
 
 def test_http_contract_rejects_identifiers_and_authenticates():
