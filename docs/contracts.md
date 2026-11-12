@@ -240,8 +240,10 @@ Every observation also carries an opaque `actuatorRef`; cells are grouped by bot
 `roomRef` and `actuatorRef`, allowing shared boilers and multiple local thermostats.
 `mode` may be null for a setpoint-only boiler or thermostat; derivation never fabricates it.
 For mode-capable ACs, provisional and learned results include the supported observed mode
-when the evidence has a unique winner. Validated setpoints span 5–80°C so high-temperature
-boiler thermostat values are not confused with or rejected as domestic-hot-water data.
+when the evidence has a unique winner. This remains the stable raw enum value; Console maps
+it to the sanitized MIoT choice label for display and falls back to the value only when the
+specification publishes no label. Validated setpoints span 5–80°C so high-temperature boiler
+thermostat values are not confused with or rejected as domestic-hot-water data.
 `powerOn` may be true, false, or null and is retained as context only; it never becomes a
 derived output. Console discovery admits a boiler only through an explicit thermostat or
 room-heating service and reads power from that same service; the Agent never receives a

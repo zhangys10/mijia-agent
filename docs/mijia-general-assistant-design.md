@@ -1158,7 +1158,10 @@ higher weight than periodic points.
 For review, the Console selects the Agent-derived cell matching the current time window and
 latest room temperature and displays one final target/mode recommendation beside that
 room's history. Mode-capable AC recommendations include the observed mode, not only the
-temperature. The recommendation remains advisory and cannot dispatch an action.
+temperature. Derivation retains the raw stable enum value, while Console stores the
+sanitized MIoT choice labels with each controller and displays the published mode name on
+recommendations, history, timelines and matrices instead of a number. The recommendation
+remains advisory and cannot dispatch an action.
 The Console reads controller on/off state and displays it as context. A boiler is eligible
 only when it exposes an explicit thermostat or room-heating service. Target, mode and
 on/off must all come from that same service; domestic-hot-water, water-heater and separate
